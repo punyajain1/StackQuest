@@ -87,7 +87,8 @@
 | **In-memory session state** | Game sessions need sub-ms reads for every answer. The `Map<sessionId, ActiveSession>` is cleared on session end. Session is also persisted to DB on start so FK constraints work. |
 | **Client sends `question_snapshot` on evaluate** | Avoids an extra DB round-trip per answer. The full question is already on the client. |
 | **HuggingFace with keyword fallback** | If HF API is down, keyword overlap scoring kicks in automatically — game never breaks. |
-| **Question pool pre-caching** | SO API has a 300 req/day free limit. We cache questions in PostgreSQL and refresh every 6 hours via cron. |
+| **Strict Hourly Pre-caching** | To completely prevent rate limits on the free tier (300 req/day), the cron job is strictly hardcoded to run exactly once an hour, fetching exactly 1 page (100 questions) for the single most starving tag. |
+| **Vectorized SO API Bulk Fetching** | After fetching questions, it instantly bulk-enriches all top answers via a single semicolon-separated API call (`/questions/1;2.../answers`). This means 100 fully-enriched questions cost only 2 API calls per hour. |
 | **Prisma + Neon adapter** | Neon's serverless driver handles connection pooling — no need for PgBouncer. |
 
 ---
@@ -1300,14 +1301,16 @@ Same label/points mapping applies.
 App Start
    │
    ▼
-Cron job starts (every 6 hours, also runs immediately on startup)
+Cron job starts (strictly every 1 hour, also runs immediately on startup)
    │
-   ├─ For each of 27 supported tags:
-   │    Count questions in DB for this tag
-   │    If count < QUESTION_POOL_MIN (50):
-   │      Fetch pages from SO API (max 5 pages × 30 questions)
-   │      Enrich with top_answer_text if accepted_answer_id exists
+   ├─ Count questions in DB for all 27 supported tags
+   ├─ Identify the single most 'starving' tag (count < QUESTION_POOL_MIN)
+   │    If a starving tag exists:
+   │      Fetch 1 page from SO API (exactly 100 questions) for that tag
+   │      Bulk-enrich all 100 questions with top_answer_text using one vectorized API call
    │      Upsert into so_question_cache
+   │    If all tags are healthy:
+   │      Pick a random tag and refresh its top 100 questions
    │
    └─ Delete entries older than 7 days (last_fetched < now - 7 days)
 ```

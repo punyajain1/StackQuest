@@ -18,7 +18,7 @@ export function validate(schema: ZodSchema, target: ValidationTarget = 'body') {
     }
     // Replace with coerced output (type transforms etc.)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (req as any)[target] = result.data;
+    Object.defineProperty(req, target, { value: result.data, enumerable: true, configurable: true, writable: true });
     next();
   };
 }

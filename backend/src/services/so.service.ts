@@ -48,10 +48,11 @@ interface SoApiWrapper<T> {
   backoff?: number;
 }
 
-function computeDifficulty(score: number, answerCount: number): Difficulty {
-  if (score > 200 || answerCount > 20) return 'easy';
-  if (score > 20 || answerCount > 5) return 'medium';
-  return 'hard';
+function computeDifficulty(score: number): Difficulty {
+  // High vote score = popular/established question, harder to guess score range
+  if (score >= 100) return 'hard';
+  if (score >= 10)  return 'medium';
+  return 'easy';
 }
 
 function stripHtml(html: string): string {
@@ -61,6 +62,7 @@ function stripHtml(html: string): string {
 class StackOverflowService {
   private client: AxiosInstance;
   private lastBackoff = 0;
+  private lastQuotaRemaining = Infinity;
 
   constructor() {
     this.client = axios.create({
@@ -79,6 +81,12 @@ class StackOverflowService {
           this.lastBackoff = wrapper.backoff;
           logger.warn({ backoff: wrapper.backoff, quota_remaining: wrapper.quota_remaining },
             'SO API requested backoff');
+        }
+        if (wrapper.quota_remaining !== undefined) {
+          this.lastQuotaRemaining = wrapper.quota_remaining;
+        }
+        if (wrapper.quota_remaining === 0) {
+          throw new AppError('Stack Overflow API daily quota exhausted. Try again tomorrow.', 429, 'SO_QUOTA_EXHAUSTED');
         }
         if (wrapper.quota_remaining < 50) {
           logger.warn({ quota_remaining: wrapper.quota_remaining }, 'SO API quota running low');
@@ -123,14 +131,19 @@ class StackOverflowService {
 
     await this.waitIfBackoff();
 
+    // Guard: don't burn remaining quota if it's already at 0
+    if (this.lastQuotaRemaining === 0) {
+      throw new AppError('Stack Overflow API daily quota exhausted. Cannot fetch new questions.', 429, 'SO_QUOTA_EXHAUSTED');
+    }
+
     const params: Record<string, string | number> = {
       ...this.commonParams,
       page,
-      pagesize: pageSize,
+      pagesize: pageSize,  // caller should pass 100 for cron bulk fetches
       sort,
       order: 'desc',
       min: minScore,
-      answers: 1,
+      // Note: 'answers: 1' is not a valid SO API param — filter out unanswered in DB layer
     };
     if (tag) params.tagged = tag;
 
@@ -152,7 +165,7 @@ class StackOverflowService {
         top_answer_text: null,
         top_answer_score: null,
         view_count: q.view_count,
-        difficulty: computeDifficulty(q.score, q.answer_count),
+        difficulty: computeDifficulty(q.score),
         is_answered: q.is_answered,
         creation_date: q.creation_date,
       }));
@@ -210,6 +223,77 @@ class StackOverflowService {
   }
 
   /**
+   * Bulk-fetch top answers for multiple questions in a SINGLE API call.
+   * Uses SO's semicolon-batching: /questions/1;2;3/answers (up to 100 IDs).
+   * Returns a Map<questionId, SoAnswer> with the best answer per question.
+   * This is the quota-efficient way to enrich a batch of questions.
+   */
+  async fetchAnswersBulk(questionIds: number[]): Promise<Map<number, SoAnswer>> {
+    if (!questionIds.length) return new Map();
+
+    // Chunk into batches of 100 (SO API limit per vectorized request)
+    const result = new Map<number, SoAnswer>();
+    const chunks: number[][] = [];
+    for (let i = 0; i < questionIds.length; i += 100) {
+      chunks.push(questionIds.slice(i, i + 100));
+    }
+
+    for (const chunk of chunks) {
+      await this.waitIfBackoff();
+      const ids = chunk.join(';');
+      const cacheKey = `so:answers_bulk:${ids}`;
+      const cached = cache.get<SoAnswer[]>(cacheKey);
+
+      let answers: SoAnswer[];
+      if (cached) {
+        answers = cached;
+      } else {
+        try {
+          const { data } = await this.client.get<SoApiWrapper<SoApiAnswer>>(
+            `/questions/${ids}/answers`,
+            {
+              params: {
+                ...this.commonParams,
+                sort: 'votes',
+                order: 'desc',
+                pagesize: 100,
+              },
+            }
+          );
+          answers = data.items.map((a) => ({
+            answer_id: a.answer_id,
+            question_id: a.question_id,
+            score: a.score,
+            is_accepted: a.is_accepted,
+            body: a.body ?? '',
+            body_markdown: a.body_markdown ?? stripHtml(a.body ?? ''),
+            owner: {
+              display_name: a.owner?.display_name ?? 'Anonymous',
+              reputation: a.owner?.reputation ?? 0,
+            },
+          }));
+          cache.set(cacheKey, answers, env.CACHE_TTL_SECONDS);
+        } catch (err) {
+          logger.error({ err, chunk }, 'SO API fetchAnswersBulk failed');
+          continue; // Don't block the entire batch on one chunk failure
+        }
+      }
+
+      // Keep only the best answer per question (accepted > highest score)
+      for (const answer of answers) {
+        const existing = result.get(answer.question_id);
+        if (!existing ||
+            (answer.is_accepted && !existing.is_accepted) ||
+            (!existing.is_accepted && answer.score > existing.score)) {
+          result.set(answer.question_id, answer);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Fetch a single question with its top answer pre-loaded.
    */
   async fetchQuestionWithTopAnswer(questionId: number): Promise<SoQuestion> {
@@ -243,7 +327,7 @@ class StackOverflowService {
       top_answer_text: topAnswer?.body_markdown ?? null,
       top_answer_score: topAnswer?.score ?? null,
       view_count: q.view_count,
-      difficulty: computeDifficulty(q.score, q.answer_count),
+      difficulty: computeDifficulty(q.score),
       is_answered: q.is_answered,
       creation_date: q.creation_date,
     };

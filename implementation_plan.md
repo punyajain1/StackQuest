@@ -50,8 +50,8 @@ Stack Overflow is dying as a community but sits on the world's richest developer
 │                         │                               │
 │  ┌──────────────────────▼──────────────────────────────┐ │
 │  │              Data Layer                             │ │
-│  │  PostgreSQL (users, scores, sessions, cache)        │ │
-│  │  Redis (rate limiting, session cache, SO API cache) │ │
+│  │  PostgreSQL (users, scores, game sessions, caching) │ │
+│  │  In-Memory (rate limiting, fast session state)      │ │
 │  └─────────────────────────────────────────────────────┘ │
 └──────────────────────────┬──────────────────────────────┘
                            │
@@ -70,8 +70,8 @@ Stack Overflow is dying as a community but sits on the world's richest developer
 |---|---|---|
 | Backend runtime | Node.js 20 + TypeScript | Type safety, fast ecosystem |
 | Framework | Express.js v5 | Mature, flexible, huge ecosystem |
-| Database | PostgreSQL (Supabase free) | Persistent, relational, free tier |
-| Cache | Redis (Upstash free) | SO API response caching, rate limit |
+| Database | PostgreSQL (Neon Serverless) | Persistent, relational, serverless polling |
+| Cache | MemoryCache (In-memory LRU) | SO API response caching, zero extra infra cost |
 | Answer Eval | HuggingFace Inference API | Free semantic similarity |
 | Web Frontend | React 18 + Vite + Tailwind | Fast, modern |
 | Mobile | React Native + Expo | Share logic with web |
@@ -139,10 +139,11 @@ Plus: **All Tags Mixed** (default shuffle)
 
 ### 📦 SO API Caching Strategy
 
-- Backend caches SO API responses in Redis for 24hrs
-- Pre-fetches popular tags in background every 6hrs
-- Question pool of 500+ questions per tag stored in PostgreSQL
-- Rate limit: 10,000 req/day with API key → ~416/hr → sufficient for all users
+- Backend caches SO API responses in Memory for 24hrs
+- To prevent rate limits, a background worker runs **strictly HOURLY**, automatically picking the most "starving" tag.
+- It fetches exactly 100 questions (1 page) and fully bulk-enriches them with their top answers via a single vectorized SO API call.
+- The 100 fully-enriched questions are directly saved to PostgreSQL for subsequent Game Sessions to draw from.
+- Native SO rate limit without API key: 300 req/day. Our cron strategy costs exactly 48 req/day.
 
 ---
 
@@ -288,7 +289,6 @@ backend/
 │   ├── config/
 │   │   ├── env.ts           # Zod-validated env vars
 │   │   ├── database.ts      # PostgreSQL pool setup
-│   │   └── redis.ts         # Redis client setup
 │   ├── routes/
 │   │   ├── auth.routes.ts
 │   │   ├── game.routes.ts
@@ -315,7 +315,7 @@ backend/
 │   │   └── db.types.ts           # TypeScript types for DB rows
 │   ├── utils/
 │   │   ├── logger.ts             # pino structured logging
-│   │   ├── cache.ts              # Redis cache helpers
+│   │   ├── cache.ts              # In-memory LRU cache
 │   │   └── similarity.ts         # cosine similarity util
 │   ├── jobs/
 │   │   └── questionFetcher.ts    # cron job: refresh SO question pool
@@ -359,8 +359,8 @@ web/
 
 ### Phase 1 — Backend Foundation (Day 1–2)
 - [ ] Init Node.js/TypeScript/Express project
-- [ ] Set up PostgreSQL schema + migrations
-- [ ] Redis cache setup
+- [ ] Set up PostgreSQL schema + Neon adapter setup
+- [ ] Lightweight in-memory LRU cache setup
 - [ ] SO API wrapper service with caching
 - [ ] Question pool fetcher (background job)
 - [ ] Basic auth (JWT + register/login)
