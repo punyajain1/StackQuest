@@ -1,0 +1,86 @@
+# ─── Dependencies ────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# ─── Build outputs ───────────────────────────────────────────
+dist/
+build/
+out/
+.next/
+.nuxt/
+.expo/
+
+# ─── Prisma generated client ─────────────────────────────────
+generated/prisma/
+
+# ─── Environment files ───────────────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# Keep the example file in version control
+!.env.example
+
+# ─── Logs ────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ─── TypeScript cache ────────────────────────────────────────
+*.tsbuildinfo
+
+# ─── Testing ─────────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ─── Cache directories ───────────────────────────────────────
+.cache/
+.parcel-cache/
+.turbo/
+.vite/
+
+# ─── macOS ───────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ─── Editor / IDE ─────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+
+# ─── Expo / React Native ─────────────────────────────────────
+.expo/
+expo-env.d.ts
+android/
+ios/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# ─── Misc ────────────────────────────────────────────────────
+*.pem
+.vercel
+.netlify
