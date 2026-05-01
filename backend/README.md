@@ -152,3 +152,12 @@ curl -s -X POST http://localhost:3000/api/game/session/end \
   -H "Content-Type: application/json" \
   -d "{\"session_id\":\"$SESSION_ID\"}"
 ```
+
+
+
+
+# Unit tests (pure logic, no DB needed)
+npx ts-node --compiler-options '{"module":"commonjs"}' src/utils/__tests__/run_tests.ts
+
+# Integration tests (requires live DB)
+npx ts-node --compiler-options '{"module":"commonjs"}' src/utils/__tests__/integration.test.ts
