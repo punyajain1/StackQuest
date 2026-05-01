@@ -17,7 +17,7 @@ router.get('/questions', generalLimiter, async (req: Request, res: Response, nex
     const tag = req.query.tag as string | undefined;
     const page = parseInt(req.query.page as string ?? '1');
     const pageSize = Math.min(parseInt(req.query.pagesize as string ?? '30'), 50);
-    const sort = (req.query.sort as string) ?? 'votes';
+    const sort = ((req.query.sort as string) ?? 'votes') as 'votes' | 'activity' | 'creation' | 'hot';
 
     const questions = await soService.fetchQuestions(tag ?? null, page, pageSize, sort);
     res.json({ success: true, data: questions });

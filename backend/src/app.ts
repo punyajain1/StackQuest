@@ -9,8 +9,10 @@ import { env } from './config/env';
 // Routes
 import authRoutes from './routes/auth.routes';
 import gameRoutes from './routes/game.routes';
+import duelRoutes from './routes/duel.routes';
+import friendRoutes from './routes/friend.routes';
+import userRoutes from './routes/user.routes';
 import scoresRoutes from './routes/scores.routes';
-import categoriesRoutes from './routes/categories.routes';
 import soRoutes from './routes/so.routes';
 
 // Swagger
@@ -48,7 +50,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    version: '1.0.0',
+    version: '2.0.0',
     env: env.NODE_ENV,
   });
 });
@@ -59,8 +61,8 @@ const swaggerSpec = swaggerJsdoc({
     openapi: '3.0.0',
     info: {
       title: 'StackQuest API',
-      version: '1.0.0',
-      description: 'Stack Overflow gamification backend — serves web and mobile clients',
+      version: '2.0.0',
+      description: 'StackQuest — Duel, Daily Challenge, Puzzle game backend API',
     },
     servers: [{ url: `http://localhost:${env.PORT}` }],
     components: {
@@ -82,8 +84,10 @@ app.get('/api/docs.json', (_req, res) => res.json(swaggerSpec));
 // ─── API Routes ──────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/game', gameRoutes);
+app.use('/api/duel', duelRoutes);
+app.use('/api/friends', friendRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/scores', scoresRoutes);
-app.use('/api/categories', categoriesRoutes);
 app.use('/api/so', soRoutes);
 
 // ─── Error Handling ───────────────────────────────────────────

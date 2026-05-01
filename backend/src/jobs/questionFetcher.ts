@@ -17,18 +17,16 @@ async function refreshQuestionPool(): Promise<void> {
   );
 
   const lackingTags = tagCounts.filter(t => t.count < env.QUESTION_POOL_MIN);
-  
+
   let targetTag: string;
   let fetchPage = 1;
 
   if (lackingTags.length > 0) {
-    // Pick the most starving tag (lowest count)
     lackingTags.sort((a, b) => a.count - b.count);
     targetTag = lackingTags[0].tag;
     fetchPage = Math.floor(lackingTags[0].count / 100) + 1;
     logger.info({ tag: targetTag, currentCount: lackingTags[0].count, needed: env.QUESTION_POOL_MIN }, 'Tag pool starving, fetching 100 questions');
   } else {
-    // All tags are healthy! Pick a random tag to refresh its most popular 100 questions
     targetTag = SUPPORTED_TAGS[Math.floor(Math.random() * SUPPORTED_TAGS.length)];
     logger.info({ tag: targetTag }, 'All tag pools healthy. Refreshing random tag for staleness');
   }
@@ -37,27 +35,11 @@ async function refreshQuestionPool(): Promise<void> {
   let totalCached = 0;
 
   try {
-    // 2. Fetch exactly one page of 100 questions (minimizes API calls to exactly 1 request for questions)
-    const questions = await soService.fetchQuestions(targetTag, fetchPage, 100, 'votes', 1);
-    totalFetched += questions.length;
+    // 2. Fetch questions WITH answers in 2 API calls (questions + bulk answers)
+    const enriched = await soService.fetchQuestionsWithAnswers(targetTag, fetchPage, 100, 'votes', 1);
+    totalFetched += enriched.length;
 
-    // 3. Bulk-fetch top answers for ALL 100 questions in ONE API call using vectorized IDs.
-    // This ensures these questions have `top_answer_text` populated so they seamlessly work
-    // in all game modes (answer_arena, judge, score_guesser, etc.)
-    const needsAnswer = questions.filter((q) => !q.top_answer_text && q.accepted_answer_id);
-    const bulkAnswers = await soService.fetchAnswersBulk(
-      needsAnswer.map((q) => q.question_id)
-    );
-
-    const enriched = questions.map((q) => {
-      const topAnswer = bulkAnswers.get(q.question_id);
-      if (topAnswer) {
-        return { ...q, top_answer_text: topAnswer.body_markdown, top_answer_score: topAnswer.score };
-      }
-      return q;
-    });
-
-    // 4. Cache them into our DB pool
+    // 3. Cache them into our DB pool
     await questionService.cacheQuestions(enriched);
     totalCached += enriched.length;
 
@@ -65,7 +47,7 @@ async function refreshQuestionPool(): Promise<void> {
     logger.error({ err, tag: targetTag }, 'Failed to refresh hourly pool for tag');
   }
 
-  // 5. Prune stale entries older than 7 days
+  // 4. Prune stale entries older than 7 days
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const { count: pruned } = await prisma.soQuestionCache.deleteMany({
     where: { lastFetched: { lt: sevenDaysAgo } },
@@ -75,7 +57,6 @@ async function refreshQuestionPool(): Promise<void> {
 }
 
 export function startQuestionFetcher(): void {
-  // Always run strictly hourly to prevent quota exhaustion (100 questions/hr)
   const cronExpression = `0 * * * *`;
 
   logger.info('Starting strict hourly question pool fetcher cron job (100/hr)');

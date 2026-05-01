@@ -10,11 +10,15 @@ datasource db {
 // ─── Enums ───────────────────────────────────────────────────
 
 enum GameMode {
-  judge
-  score_guesser
-  answer_arena
-  multiple_choice
-  tag_guesser
+  duel
+  daily_challenge
+  puzzle
+}
+
+enum QuestionType {
+  mcq
+  fill_in_blank
+  string_answer
 }
 
 enum Difficulty {
@@ -23,42 +27,174 @@ enum Difficulty {
   hard
 }
 
-// ─── Models ──────────────────────────────────────────────────
+enum FriendStatus {
+  pending
+  accepted
+  blocked
+}
+
+enum League {
+  bronze
+  silver
+  gold
+  platinum
+  diamond
+  master
+  legend
+}
+
+// ─── User ────────────────────────────────────────────────────
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  username     String   @unique
-  email        String?  @unique
-  passwordHash String?  @map("password_hash")
-  isGuest      Boolean  @default(false) @map("is_guest")
-  xp           Int      @default(0)
-  level        Int      @default(1)
-  streakRecord Int      @default(0) @map("streak_record")
-  totalGames   Int      @default(0) @map("total_games")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
-  lastActive   DateTime @default(now()) @map("last_active") @db.Timestamptz
+  id            String   @id @default(uuid()) @db.Uuid
+  username      String   @unique
+  email         String?  @unique
+  passwordHash  String?  @map("password_hash")
+  isGuest       Boolean  @default(false) @map("is_guest")
 
+  // Profile
+  avatarUrl     String?  @map("avatar_url")
+  title         String?  @default("Beginner")
+  bio           String?
+
+  // Stats
+  elo           Int      @default(1000)
+  xp            Int      @default(0)
+  level         Int      @default(1)
+  league        League   @default(bronze)
+  totalDuels    Int      @default(0) @map("total_duels")
+  duelsWon      Int      @default(0) @map("duels_won")
+  winRate       Float    @default(0) @map("win_rate")
+  maxStreak     Int      @default(0) @map("max_streak")
+  currentStreak Int      @default(0) @map("current_streak")
+  totalGames    Int      @default(0) @map("total_games")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  lastActive    DateTime @default(now()) @map("last_active") @db.Timestamptz
+
+  // Relations
   gameSessions       GameSession[]
+  achievements       UserAchievement[]
+  sentFriendReqs     Friendship[]       @relation("sender")
+  receivedFriendReqs Friendship[]       @relation("receiver")
+  duelPlayer1        DuelMatch[]        @relation("player1")
+  duelPlayer2        DuelMatch[]        @relation("player2")
   leaderboardEntries LeaderboardEntry[]
 
   @@map("users")
 }
 
+// ─── Friendships ─────────────────────────────────────────────
+
+model Friendship {
+  id         String       @id @default(uuid()) @db.Uuid
+  senderId   String       @map("sender_id") @db.Uuid
+  receiverId String       @map("receiver_id") @db.Uuid
+  status     FriendStatus @default(pending)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+
+  sender   User @relation("sender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@map("friendships")
+}
+
+// ─── Achievements ────────────────────────────────────────────
+
+model Achievement {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  name        String
+  description String
+  icon        String?
+  color       String?
+  criteria    Json
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  users UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  achievementId String   @map("achievement_id") @db.Uuid
+  unlockedAt    DateTime @default(now()) @map("unlocked_at") @db.Timestamptz
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
+}
+
+// ─── Duel Match ──────────────────────────────────────────────
+
+model DuelMatch {
+  id           String    @id @default(uuid()) @db.Uuid
+  player1Id    String    @map("player1_id") @db.Uuid
+  player2Id    String?   @map("player2_id") @db.Uuid
+  winnerId     String?   @map("winner_id") @db.Uuid
+  player1Score Int       @default(0) @map("player1_score")
+  player2Score Int       @default(0) @map("player2_score")
+  player1Elo   Int       @default(0) @map("player1_elo_change")
+  player2Elo   Int       @default(0) @map("player2_elo_change")
+  status       String    @default("waiting") // waiting | active | completed | cancelled
+  rounds       Int       @default(5)
+  tag          String?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz
+
+  player1   User           @relation("player1", fields: [player1Id], references: [id])
+  player2   User?          @relation("player2", fields: [player2Id], references: [id])
+  questions DuelQuestion[]
+
+  @@map("duel_matches")
+}
+
+model DuelQuestion {
+  id             String       @id @default(uuid()) @db.Uuid
+  matchId        String       @map("match_id") @db.Uuid
+  roundNumber    Int          @map("round_number")
+  soQuestionId   Int          @map("so_question_id")
+  questionType   QuestionType @map("question_type")
+  questionData   Json         @map("question_data")
+  correctAnswer  String       @map("correct_answer")
+  options        Json?
+  player1Answer  String?      @map("player1_answer")
+  player2Answer  String?      @map("player2_answer")
+  player1Correct Boolean?     @map("player1_correct")
+  player2Correct Boolean?     @map("player2_correct")
+  player1TimeMs  Int?         @map("player1_time_ms")
+  player2TimeMs  Int?         @map("player2_time_ms")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  match DuelMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, roundNumber])
+  @@map("duel_questions")
+}
+
+// ─── Game Session (Daily Challenge & Puzzle) ─────────────────
+
 model GameSession {
-  id             String    @id @default(uuid()) @db.Uuid
-  userId         String?   @map("user_id") @db.Uuid
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
   mode           GameMode
   tag            String?
-  score          Int       @default(0)
-  accuracy       Float     @default(0)
-  streakPeak     Int       @default(0) @map("streak_peak")
-  questionsCount Int       @default(0) @map("questions_count")
-  correctCount   Int       @default(0) @map("correct_count")
-  durationSecs   Int       @default(0) @map("duration_secs")
-  isDaily        Boolean   @default(false) @map("is_daily")
+  score          Int      @default(0)
+  accuracy       Float    @default(0)
+  streakPeak     Int      @default(0) @map("streak_peak")
+  questionsCount Int      @default(0) @map("questions_count")
+  correctCount   Int      @default(0) @map("correct_count")
+  durationSecs   Int      @default(0) @map("duration_secs")
+  xpEarned       Int      @default(0) @map("xp_earned")
   dailyDate      DateTime? @map("daily_date") @db.Date
-  xpEarned       Int       @default(0) @map("xp_earned")
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   user               User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   questionAnswers    QuestionAnswer[]
@@ -68,23 +204,25 @@ model GameSession {
 }
 
 model QuestionAnswer {
-  id              String   @id @default(uuid()) @db.Uuid
-  sessionId       String   @map("session_id") @db.Uuid
-  soQuestionId    Int      @map("so_question_id")
-  mode            GameMode
-  playerAnswer    String?  @map("player_answer")
-  playerChoice    String?  @map("player_choice")
-  correct         Boolean  @default(false)
-  scoreEarned     Int      @default(0) @map("score_earned")
-  xpEarned        Int      @default(0) @map("xp_earned")
-  similarityScore Float?   @map("similarity_score")
-  timeTakenMs     Int      @default(0) @map("time_taken_ms")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id              String       @id @default(uuid()) @db.Uuid
+  sessionId       String       @map("session_id") @db.Uuid
+  soQuestionId    Int          @map("so_question_id")
+  questionType    QuestionType @map("question_type")
+  playerAnswer    String?      @map("player_answer")
+  playerChoice    String?      @map("player_choice")
+  correct         Boolean      @default(false)
+  scoreEarned     Int          @default(0) @map("score_earned")
+  xpEarned        Int          @default(0) @map("xp_earned")
+  similarityScore Float?       @map("similarity_score")
+  timeTakenMs     Int          @default(0) @map("time_taken_ms")
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz
 
   session GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@map("question_answers")
 }
+
+// ─── SO Question Cache ───────────────────────────────────────
 
 model SoQuestionCache {
   questionId       Int        @id @map("question_id")
@@ -95,8 +233,9 @@ model SoQuestionCache {
   score            Int        @default(0)
   answerCount      Int        @default(0) @map("answer_count")
   acceptedAnswerId Int?       @map("accepted_answer_id")
-  topAnswerText    String?    @map("top_answer_text")
+  topAnswerBody    String?    @map("top_answer_body")
   topAnswerScore   Int?       @map("top_answer_score")
+  topAnswerAuthor  String?    @map("top_answer_author")
   viewCount        Int        @default(0) @map("view_count")
   difficulty       Difficulty @default(medium)
   isAnswered       Boolean    @default(false) @map("is_answered")
@@ -106,10 +245,13 @@ model SoQuestionCache {
   @@map("so_question_cache")
 }
 
+// ─── Leaderboard ─────────────────────────────────────────────
+
 model LeaderboardEntry {
   id         String   @id @default(uuid()) @db.Uuid
   userId     String?  @map("user_id") @db.Uuid
-  sessionId  String   @map("session_id") @db.Uuid
+  sessionId  String?  @map("session_id") @db.Uuid
+  duelId     String?  @map("duel_id") @db.Uuid
   username   String
   score      Int
   mode       GameMode
@@ -117,11 +259,13 @@ model LeaderboardEntry {
   periodWeek String   @map("period_week")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user    User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
-  session GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  session GameSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@map("leaderboard_entries")
 }
+
+// ─── Daily Challenge ─────────────────────────────────────────
 
 model DailyChallenge {
   id          String   @id @default(uuid()) @db.Uuid

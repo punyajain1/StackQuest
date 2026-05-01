@@ -5,13 +5,28 @@ import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
 import type { SoQuestion, SoAnswer, Difficulty } from '../models/db.types';
 
-// SO API custom filter that includes body_markdown
-// Created via https://api.stackexchange.com/docs/create-filter
-// Includes: question.body_markdown, question.title, question.tags, question.score,
-//           question.answer_count, question.accepted_answer_id, question.view_count,
-//           question.creation_date, question.is_answered, answer.body_markdown,
-//           answer.score, answer.is_accepted, answer.owner
-const SO_FILTER = '!nNPvSNVZJS';  // pre-created filter with body_markdown
+// ─── Constants ────────────────────────────────────────────────────────────────
+const QUOTA_CACHE_KEY = 'so:quota_remaining';
+
+/**
+ * Custom SO filter that returns:
+ *   question: question_id, title, body, body_markdown, tags, score,
+ *             answer_count, accepted_answer_id, view_count, creation_date,
+ *             is_answered, owner
+ *   answer:   answer_id, question_id, body, body_markdown, score,
+ *             is_accepted, owner
+ *   owner:    display_name, reputation
+ *
+ * Created via GET /filters/create with these includes.
+ * This is a safe (sanitized HTML) filter.
+ *
+ * The filter below was pre-created. If it ever becomes invalid we fall back
+ * to 'withbody' and lose body_markdown on answers.
+ */
+const CUSTOM_FILTER = '!6WPIomnJQl0me'; // pre-created filter including body_markdown
+
+/** Fallback filter if custom filter fails */
+const FALLBACK_FILTER = 'withbody';
 
 interface SoApiQuestion {
   question_id: number;
@@ -25,6 +40,7 @@ interface SoApiQuestion {
   view_count: number;
   creation_date: number;
   is_answered: boolean;
+  owner?: { display_name?: string; reputation?: number };
 }
 
 interface SoApiAnswer {
@@ -34,10 +50,7 @@ interface SoApiAnswer {
   is_accepted: boolean;
   body: string;
   body_markdown?: string;
-  owner: {
-    display_name: string;
-    reputation: number;
-  };
+  owner?: { display_name?: string; reputation?: number };
 }
 
 interface SoApiWrapper<T> {
@@ -48,244 +61,226 @@ interface SoApiWrapper<T> {
   backoff?: number;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function computeDifficulty(score: number): Difficulty {
-  // High vote score = popular/established question, harder to guess score range
-  if (score >= 100) return 'hard';
-  if (score >= 10)  return 'medium';
+  if (score >= 500) return 'hard';
+  if (score >= 50) return 'medium';
   return 'easy';
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+function mapQuestion(q: SoApiQuestion): SoQuestion {
+  return {
+    question_id: q.question_id,
+    title: q.title,
+    body: q.body ?? '',
+    body_markdown: q.body_markdown ?? '',
+    tags: q.tags ?? [],
+    score: q.score,
+    answer_count: q.answer_count,
+    accepted_answer_id: q.accepted_answer_id ?? null,
+    top_answer_body: null,
+    top_answer_score: null,
+    top_answer_author: null,
+    view_count: q.view_count,
+    difficulty: computeDifficulty(q.score),
+    is_answered: q.is_answered,
+    creation_date: q.creation_date,
+    owner_display_name: q.owner?.display_name,
+  };
 }
+
+function mapAnswer(a: SoApiAnswer): SoAnswer {
+  return {
+    answer_id: a.answer_id,
+    question_id: a.question_id,
+    score: a.score,
+    is_accepted: a.is_accepted,
+    body: a.body ?? '',
+    body_markdown: a.body_markdown ?? '',
+    owner: {
+      display_name: a.owner?.display_name ?? 'Anonymous',
+      reputation: a.owner?.reputation ?? 0,
+    },
+  };
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
 
 class StackOverflowService {
   private client: AxiosInstance;
-  private lastBackoff = 0;
-  private lastQuotaRemaining = Infinity;
+  private lastBackoffUntil = 0;
+  private activeFilter = CUSTOM_FILTER;
 
   constructor() {
     this.client = axios.create({
       baseURL: env.SO_API_BASE,
       timeout: 15000,
       headers: {
-        'User-Agent': 'StackQuest/1.0 (game app; contact via github)',
         'Accept-Encoding': 'gzip',
+        'User-Agent': 'StackQuest/2.0 (game; contact via github)',
       },
     });
 
-    this.client.interceptors.response.use(
-      (res) => {
-        const wrapper = res.data as SoApiWrapper<unknown>;
-        if (wrapper.backoff) {
-          this.lastBackoff = wrapper.backoff;
-          logger.warn({ backoff: wrapper.backoff, quota_remaining: wrapper.quota_remaining },
-            'SO API requested backoff');
+    // Intercept responses: honour backoff + track quota
+    this.client.interceptors.response.use((res) => {
+      const w = res.data as SoApiWrapper<unknown>;
+
+      if (typeof w.quota_remaining === 'number') {
+        cache.set(QUOTA_CACHE_KEY, w.quota_remaining, 3600);
+        if (w.quota_remaining < 20) {
+          logger.warn({ quota_remaining: w.quota_remaining }, '⚠️  SO API quota critically low');
         }
-        if (wrapper.quota_remaining !== undefined) {
-          this.lastQuotaRemaining = wrapper.quota_remaining;
-        }
-        if (wrapper.quota_remaining === 0) {
-          throw new AppError('Stack Overflow API daily quota exhausted. Try again tomorrow.', 429, 'SO_QUOTA_EXHAUSTED');
-        }
-        if (wrapper.quota_remaining < 50) {
-          logger.warn({ quota_remaining: wrapper.quota_remaining }, 'SO API quota running low');
-        }
-        return res;
-      },
-      (err) => Promise.reject(err)
-    );
+      }
+
+      if (w.backoff) {
+        this.lastBackoffUntil = Date.now() + w.backoff * 1000;
+        logger.warn({ backoff: w.backoff }, '⏳ SO API backoff requested');
+      }
+
+      if (w.quota_remaining === 0) {
+        throw new AppError('Stack Overflow daily quota exhausted', 429, 'SO_QUOTA_EXHAUSTED');
+      }
+
+      return res;
+    }, (err) => Promise.reject(err));
   }
 
-  private get commonParams(): Record<string, string> {
-    const params: Record<string, string> = {
-      site: env.SO_SITE,
-      filter: SO_FILTER,
-    };
-    if (env.SO_API_KEY) params.key = env.SO_API_KEY;
-    return params;
+  // ── Private helpers ──────────────────────────────────────────────────────────
+
+  private get baseParams(): Record<string, string> {
+    const p: Record<string, string> = { site: env.SO_SITE, filter: this.activeFilter };
+    if (env.SO_API_KEY) p.key = env.SO_API_KEY;
+    return p;
   }
 
-  private async waitIfBackoff(): Promise<void> {
-    if (this.lastBackoff > 0) {
-      const wait = this.lastBackoff * 1000;
-      logger.info({ waitMs: wait }, 'Waiting for SO API backoff');
+  private async waitBackoff(): Promise<void> {
+    const wait = this.lastBackoffUntil - Date.now();
+    if (wait > 0) {
+      logger.info({ waitMs: wait }, 'Waiting for SO API backoff...');
       await new Promise((r) => setTimeout(r, wait));
-      this.lastBackoff = 0;
     }
   }
 
+  private async get<T>(path: string, params: Record<string, unknown>): Promise<SoApiWrapper<T>> {
+    await this.waitBackoff();
+    try {
+      const res = await this.client.get<SoApiWrapper<T>>(path, {
+        params: { ...this.baseParams, ...params },
+      });
+      return res.data;
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 400) {
+        // Filter might be invalid — fall back to withbody
+        if (this.activeFilter !== FALLBACK_FILTER) {
+          logger.warn('Custom SO filter rejected, falling back to withbody');
+          this.activeFilter = FALLBACK_FILTER;
+          return this.get<T>(path, params);
+        }
+      }
+      logger.error({ err, path }, 'SO API request failed');
+      throw new AppError('Failed to reach Stack Overflow API', 502, 'SO_API_ERROR');
+    }
+  }
+
+  // ── Public API ───────────────────────────────────────────────────────────────
+
   /**
-   * Fetch questions by tag from SO API, with caching.
+   * Fetch questions from SO.
+   *
+   * SO API: GET /questions
+   *   ?tagged=javascript   (semicolon-delimited for AND, max 5 tags)
+   *   &sort=votes          (votes | activity | creation | hot | week | month)
+   *   &order=desc
+   *   &min=<score>         (minimum score filter)
+   *   &pagesize=<n>        (max 100)
+   *   &page=<n>
    */
   async fetchQuestions(
     tag: string | null,
     page = 1,
-    pageSize = 30,
-    sort = 'votes',
-    minScore = 5
+    pageSize = 100,
+    sort: 'votes' | 'activity' | 'creation' | 'hot' = 'votes',
+    minScore = 5,
   ): Promise<SoQuestion[]> {
-    const cacheKey = `so:questions:${tag ?? 'all'}:${page}:${sort}`;
-    const cached = cache.get<SoQuestion[]>(cacheKey);
-    if (cached) return cached;
+    const cacheKey = `so:q:${tag ?? 'all'}:${page}:${sort}:${minScore}`;
+    const hit = cache.get<SoQuestion[]>(cacheKey);
+    if (hit) return hit;
 
-    await this.waitIfBackoff();
-
-    // Guard: don't burn remaining quota if it's already at 0
-    if (this.lastQuotaRemaining === 0) {
-      throw new AppError('Stack Overflow API daily quota exhausted. Cannot fetch new questions.', 429, 'SO_QUOTA_EXHAUSTED');
-    }
-
-    const params: Record<string, string | number> = {
-      ...this.commonParams,
-      page,
-      pagesize: pageSize,  // caller should pass 100 for cron bulk fetches
-      sort,
-      order: 'desc',
-      min: minScore,
-      // Note: 'answers: 1' is not a valid SO API param — filter out unanswered in DB layer
+    const params: Record<string, unknown> = {
+      page, pagesize: pageSize, sort, order: 'desc', min: minScore,
     };
     if (tag) params.tagged = tag;
 
-    try {
-      const { data } = await this.client.get<SoApiWrapper<SoApiQuestion>>(
-        '/questions',
-        { params }
-      );
+    const data = await this.get<SoApiQuestion>('/questions', params);
+    const questions = data.items.map(mapQuestion);
 
-      const questions: SoQuestion[] = data.items.map((q) => ({
-        question_id: q.question_id,
-        title: q.title,
-        body: q.body ?? '',
-        body_markdown: q.body_markdown ?? stripHtml(q.body ?? ''),
-        tags: q.tags,
-        score: q.score,
-        answer_count: q.answer_count,
-        accepted_answer_id: q.accepted_answer_id ?? null,
-        top_answer_text: null,
-        top_answer_score: null,
-        view_count: q.view_count,
-        difficulty: computeDifficulty(q.score),
-        is_answered: q.is_answered,
-        creation_date: q.creation_date,
-      }));
-
-      cache.set(cacheKey, questions, env.CACHE_TTL_SECONDS);
-      return questions;
-    } catch (err) {
-      logger.error({ err, tag, page }, 'SO API fetchQuestions failed');
-      throw new AppError('Failed to fetch questions from Stack Overflow', 502, 'SO_API_ERROR');
-    }
+    cache.set(cacheKey, questions, env.CACHE_TTL_SECONDS);
+    logger.info({ tag, page, count: questions.length }, 'SO questions fetched');
+    return questions;
   }
 
   /**
-   * Fetch answers for a specific question, with caching.
+   * Fetch answers for a single question.
+   *
+   * SO API: GET /questions/{id}/answers
+   *   ?sort=votes&order=desc&pagesize=5
    */
   async fetchAnswers(questionId: number): Promise<SoAnswer[]> {
-    const cacheKey = `so:answers:${questionId}`;
-    const cached = cache.get<SoAnswer[]>(cacheKey);
-    if (cached) return cached;
+    const cacheKey = `so:ans:${questionId}`;
+    const hit = cache.get<SoAnswer[]>(cacheKey);
+    if (hit) return hit;
 
-    await this.waitIfBackoff();
+    const data = await this.get<SoApiAnswer>(
+      `/questions/${questionId}/answers`,
+      { sort: 'votes', order: 'desc', pagesize: 5 },
+    );
 
-    try {
-      const { data } = await this.client.get<SoApiWrapper<SoApiAnswer>>(
-        `/questions/${questionId}/answers`,
-        {
-          params: {
-            ...this.commonParams,
-            sort: 'votes',
-            order: 'desc',
-            pagesize: 5,
-          },
-        }
-      );
-
-      const answers: SoAnswer[] = data.items.map((a) => ({
-        answer_id: a.answer_id,
-        question_id: a.question_id,
-        score: a.score,
-        is_accepted: a.is_accepted,
-        body: a.body ?? '',
-        body_markdown: a.body_markdown ?? stripHtml(a.body ?? ''),
-        owner: {
-          display_name: a.owner?.display_name ?? 'Anonymous',
-          reputation: a.owner?.reputation ?? 0,
-        },
-      }));
-
-      cache.set(cacheKey, answers, env.CACHE_TTL_SECONDS);
-      return answers;
-    } catch (err) {
-      logger.error({ err, questionId }, 'SO API fetchAnswers failed');
-      throw new AppError('Failed to fetch answers from Stack Overflow', 502, 'SO_API_ERROR');
-    }
+    const answers = data.items.map(mapAnswer);
+    cache.set(cacheKey, answers, env.CACHE_TTL_SECONDS);
+    return answers;
   }
 
   /**
-   * Bulk-fetch top answers for multiple questions in a SINGLE API call.
-   * Uses SO's semicolon-batching: /questions/1;2;3/answers (up to 100 IDs).
-   * Returns a Map<questionId, SoAnswer> with the best answer per question.
-   * This is the quota-efficient way to enrich a batch of questions.
+   * Bulk-fetch top answers for up to 100 question IDs in a single API call.
+   *
+   * SO API: GET /questions/{ids}/answers
+   *   where {ids} = "1;2;3;4" (semicolon-separated, max 100)
+   *
+   * Returns Map<questionId, best SoAnswer>
+   * "Best" = accepted answer first, else highest score.
    */
   async fetchAnswersBulk(questionIds: number[]): Promise<Map<number, SoAnswer>> {
     if (!questionIds.length) return new Map();
 
-    // Chunk into batches of 100 (SO API limit per vectorized request)
     const result = new Map<number, SoAnswer>();
-    const chunks: number[][] = [];
-    for (let i = 0; i < questionIds.length; i += 100) {
-      chunks.push(questionIds.slice(i, i + 100));
-    }
 
-    for (const chunk of chunks) {
-      await this.waitIfBackoff();
-      const ids = chunk.join(';');
-      const cacheKey = `so:answers_bulk:${ids}`;
-      const cached = cache.get<SoAnswer[]>(cacheKey);
+    // Split into batches of 100 (API hard limit)
+    for (let i = 0; i < questionIds.length; i += 100) {
+      const batch = questionIds.slice(i, i + 100);
+      const ids = batch.join(';');
+      const cacheKey = `so:ans_bulk:${ids}`;
+      const hit = cache.get<SoAnswer[]>(cacheKey);
 
       let answers: SoAnswer[];
-      if (cached) {
-        answers = cached;
+      if (hit) {
+        answers = hit;
       } else {
-        try {
-          const { data } = await this.client.get<SoApiWrapper<SoApiAnswer>>(
-            `/questions/${ids}/answers`,
-            {
-              params: {
-                ...this.commonParams,
-                sort: 'votes',
-                order: 'desc',
-                pagesize: 100,
-              },
-            }
-          );
-          answers = data.items.map((a) => ({
-            answer_id: a.answer_id,
-            question_id: a.question_id,
-            score: a.score,
-            is_accepted: a.is_accepted,
-            body: a.body ?? '',
-            body_markdown: a.body_markdown ?? stripHtml(a.body ?? ''),
-            owner: {
-              display_name: a.owner?.display_name ?? 'Anonymous',
-              reputation: a.owner?.reputation ?? 0,
-            },
-          }));
-          cache.set(cacheKey, answers, env.CACHE_TTL_SECONDS);
-        } catch (err) {
-          logger.error({ err, chunk }, 'SO API fetchAnswersBulk failed');
-          continue; // Don't block the entire batch on one chunk failure
-        }
+        const data = await this.get<SoApiAnswer>(
+          `/questions/${ids}/answers`,
+          { sort: 'votes', order: 'desc', pagesize: 100 },
+        );
+        answers = data.items.map(mapAnswer);
+        cache.set(cacheKey, answers, env.CACHE_TTL_SECONDS);
       }
 
-      // Keep only the best answer per question (accepted > highest score)
-      for (const answer of answers) {
-        const existing = result.get(answer.question_id);
-        if (!existing ||
-            (answer.is_accepted && !existing.is_accepted) ||
-            (!existing.is_accepted && answer.score > existing.score)) {
-          result.set(answer.question_id, answer);
+      // Keep best answer per question (accepted > highest score)
+      for (const ans of answers) {
+        const prev = result.get(ans.question_id);
+        if (!prev
+          || (ans.is_accepted && !prev.is_accepted)
+          || (!prev.is_accepted && ans.score > prev.score)) {
+          result.set(ans.question_id, ans);
         }
       }
     }
@@ -294,59 +289,74 @@ class StackOverflowService {
   }
 
   /**
-   * Fetch a single question with its top answer pre-loaded.
+   * Fetch questions AND enrich them with their top answer in 2 API calls.
+   * Step 1: GET /questions (up to 100)
+   * Step 2: GET /questions/{ids}/answers (single batch call for all IDs)
    */
-  async fetchQuestionWithTopAnswer(questionId: number): Promise<SoQuestion> {
-    const cacheKey = `so:question_full:${questionId}`;
-    const cached = cache.get<SoQuestion>(cacheKey);
-    if (cached) return cached;
+  async fetchQuestionsWithAnswers(
+    tag: string | null,
+    page = 1,
+    pageSize = 100,
+    sort: 'votes' | 'activity' | 'creation' | 'hot' = 'votes',
+    minScore = 5,
+  ): Promise<SoQuestion[]> {
+    const questions = await this.fetchQuestions(tag, page, pageSize, sort, minScore);
 
-    const answers = await this.fetchAnswers(questionId);
-    const topAnswer = answers.sort(
-      (a, b) => (b.is_accepted ? 1 : 0) - (a.is_accepted ? 1 : 0) || b.score - a.score
-    )[0];
+    // Only enrich questions that have answers
+    const needsEnrich = questions.filter((q) => q.is_answered && !q.top_answer_body);
+    if (!needsEnrich.length) return questions;
 
-    // Get base question from cache or fetch directly
-    const { data } = await this.client.get<SoApiWrapper<SoApiQuestion>>(
-      `/questions/${questionId}`,
-      { params: this.commonParams }
-    );
+    const answerMap = await this.fetchAnswersBulk(needsEnrich.map((q) => q.question_id));
 
-    if (!data.items.length) throw AppError.notFound('Question not found on SO');
-    const q = data.items[0];
-
-    const question: SoQuestion = {
-      question_id: q.question_id,
-      title: q.title,
-      body: q.body ?? '',
-      body_markdown: q.body_markdown ?? stripHtml(q.body ?? ''),
-      tags: q.tags,
-      score: q.score,
-      answer_count: q.answer_count,
-      accepted_answer_id: q.accepted_answer_id ?? null,
-      top_answer_text: topAnswer?.body_markdown ?? null,
-      top_answer_score: topAnswer?.score ?? null,
-      view_count: q.view_count,
-      difficulty: computeDifficulty(q.score),
-      is_answered: q.is_answered,
-      creation_date: q.creation_date,
-    };
-
-    cache.set(cacheKey, question, env.CACHE_TTL_SECONDS);
-    return question;
+    return questions.map((q) => {
+      const top = answerMap.get(q.question_id);
+      if (!top) return q;
+      return {
+        ...q,
+        top_answer_body: top.body,       // HTML body
+        top_answer_score: top.score,
+        top_answer_author: top.owner.display_name,
+      };
+    });
   }
 
   /**
-   * Get quota status (for monitoring).
+   * Fetch a single question (by ID) with its top answer.
+   * Uses /questions/{id} + /questions/{id}/answers
    */
-  async getQuotaStatus(): Promise<{ quota_max: number; quota_remaining: number }> {
-    const { data } = await this.client.get<SoApiWrapper<unknown>>('/info', {
-      params: this.commonParams,
-    });
-    return {
-      quota_max: data.quota_max,
-      quota_remaining: data.quota_remaining,
+  async fetchFullQuestion(questionId: number): Promise<SoQuestion> {
+    const cacheKey = `so:full:${questionId}`;
+    const hit = cache.get<SoQuestion>(cacheKey);
+    if (hit) return hit;
+
+    const [qData, answers] = await Promise.all([
+      this.get<SoApiQuestion>(`/questions/${questionId}`, {}),
+      this.fetchAnswers(questionId),
+    ]);
+
+    if (!qData.items.length) throw AppError.notFound('Question not found on Stack Overflow');
+
+    const q = mapQuestion(qData.items[0]);
+    const top = answers.sort(
+      (a, b) => (b.is_accepted ? 1 : 0) - (a.is_accepted ? 1 : 0) || b.score - a.score
+    )[0];
+
+    const enriched: SoQuestion = {
+      ...q,
+      top_answer_body: top?.body ?? null,
+      top_answer_score: top?.score ?? null,
+      top_answer_author: top?.owner.display_name ?? null,
     };
+
+    cache.set(cacheKey, enriched, env.CACHE_TTL_SECONDS);
+    return enriched;
+  }
+
+  /** Get current quota status. */
+  async getQuotaStatus(): Promise<{ quota_max: number; quota_remaining: number }> {
+    const remaining = cache.get<number>(QUOTA_CACHE_KEY);
+    const data = await this.get<Record<string, unknown>>('/info', {});
+    return { quota_max: data.quota_max, quota_remaining: data.quota_remaining };
   }
 }
 

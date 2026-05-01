@@ -2,31 +2,46 @@ import 'dotenv/config';
 import { env } from './config/env';
 import { connectDB, prisma } from './config/prisma';
 import { logger } from './utils/logger';
-import app from './app';
+import { httpServer, io } from './socket/socket.server';
+import { registerDuelHandlers } from './socket/duel.socket';
+import { registerDailyHandlers } from './socket/daily.socket';
 import { startQuestionFetcher } from './jobs/questionFetcher';
+import { achievementService } from './services/achievement.service';
 
 async function bootstrap(): Promise<void> {
   // 1. Connect to PostgreSQL via Prisma
   await connectDB();
 
-  // 2. Start HTTP server
-  const server = app.listen(env.PORT, () => {
+  // 2. Seed achievements table (no-op if already seeded)
+  await achievementService.seedAchievements();
+
+  // 3. Register Socket.io namespaces
+  registerDuelHandlers(io.of('/duel'));
+  registerDailyHandlers(io.of('/daily'));
+
+  logger.info('✅ Socket.io namespaces registered: /duel  /daily');
+
+  // 4. Start HTTP + WebSocket server
+  const server = httpServer.listen(env.PORT, () => {
     logger.info(`
-╔═══════════════════════════════════════════╗
-║   StackQuest API Server — v1.0.0          ║
-║   http://localhost:${env.PORT}                   ║
-║   Swagger: http://localhost:${env.PORT}/api/docs ║
-║   Env: ${env.NODE_ENV.padEnd(33)}║
-╚═══════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════╗
+║   StackQuest API Server — v2.0.0                  ║
+║   HTTP  → http://localhost:${env.PORT}                   ║
+║   Docs  → http://localhost:${env.PORT}/api/docs          ║
+║   WS    → ws://localhost:${env.PORT}/duel                ║
+║   WS    → ws://localhost:${env.PORT}/daily               ║
+║   Env   : ${env.NODE_ENV.padEnd(39)}║
+╚═══════════════════════════════════════════════════╝
     `);
   });
 
-  // 3. Start background question pool refresher
+  // 5. Start background question pool refresher
   startQuestionFetcher();
 
-  // ─── Graceful shutdown ─────────────────────────────────────
+  // ─── Graceful shutdown ─────────────────────────────────────────────────────
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Shutdown signal received, closing gracefully...');
+    io.close();
     server.close(async () => {
       await prisma.$disconnect();
       logger.info('Server and Prisma client closed. Goodbye! 👋');
@@ -40,7 +55,7 @@ async function bootstrap(): Promise<void> {
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
   process.on('uncaughtException', (err) => {
     logger.fatal({ err }, 'Uncaught exception — shutting down');
     shutdown('uncaughtException');

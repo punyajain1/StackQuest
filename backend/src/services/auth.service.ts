@@ -39,6 +39,11 @@ export class AuthService {
         email: email.toLowerCase(),
         passwordHash,
         isGuest: false,
+        elo: 1000,
+        xp: 0,
+        level: 1,
+        league: 'bronze',
+        title: 'Beginner',
       },
     });
 
@@ -117,14 +122,39 @@ export class AuthService {
     return safeUser;
   }
 
+  // ─── Update Profile ────────────────────────────────────────
+
+  async updateProfile(userId: string, data: {
+    username?: string;
+    avatarUrl?: string;
+    bio?: string;
+  }): Promise<Omit<User, 'passwordHash'>> {
+    if (data.username) {
+      const existing = await prisma.user.findUnique({ where: { username: data.username } });
+      if (existing && existing.id !== userId) {
+        throw AppError.conflict('Username already taken', 'USERNAME_TAKEN');
+      }
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(data.username ? { username: data.username } : {}),
+        ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl } : {}),
+        ...(data.bio !== undefined ? { bio: data.bio } : {}),
+      },
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { passwordHash: _, ...safeUser } = user;
+    return safeUser;
+  }
+
   // ─── Helpers ───────────────────────────────────────────────
 
   private signToken(user: User): string {
     const payload: UserPayload = {
-      id: user.id,
-      username: user.username,
-      email: user.email ?? '',
-      is_guest: user.isGuest,
+      id: user.id, username: user.username, email: user.email ?? '', is_guest: user.isGuest,
     };
     return jwt.sign(payload, env.JWT_SECRET, {
       expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],

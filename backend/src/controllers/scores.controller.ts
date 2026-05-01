@@ -5,7 +5,7 @@ import type { GameMode } from '../models/db.types';
 
 export const leaderboardSchema = z.object({
   period: z.enum(['all_time', 'weekly']).optional().default('all_time'),
-  mode: z.enum(['judge', 'score_guesser', 'answer_arena', 'multiple_choice', 'tag_guesser']).optional(),
+  mode: z.enum(['duel', 'daily_challenge', 'puzzle']).optional(),
   tag: z.string().optional(),
   limit: z.string().optional().default('20').transform(Number),
 });
@@ -13,7 +13,7 @@ export const leaderboardSchema = z.object({
 export const saveGuestSchema = z.object({
   username: z.string().min(1).max(50),
   score: z.number().int().min(0),
-  mode: z.enum(['judge', 'score_guesser', 'answer_arena', 'multiple_choice', 'tag_guesser']),
+  mode: z.enum(['duel', 'daily_challenge', 'puzzle']),
   tag: z.string().nullable().optional(),
   session_id: z.string().uuid(),
 });
@@ -24,22 +24,17 @@ export async function getLeaderboard(req: Request, res: Response, next: NextFunc
     const entries = await scoreService.getLeaderboard({
       period: period as 'all_time' | 'weekly',
       mode: mode as GameMode | undefined,
-      tag,
-      limit,
+      tag, limit,
     });
     res.json({ success: true, data: entries });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 }
 
 export async function getMyStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const stats = await scoreService.getUserStats(req.user!.id);
     res.json({ success: true, data: stats });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 }
 
 export async function getMyHistory(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -48,23 +43,17 @@ export async function getMyHistory(req: Request, res: Response, next: NextFuncti
     const offset = parseInt(req.query.offset as string ?? '0');
     const sessions = await scoreService.getUserSessions(req.user!.id, limit, offset);
     res.json({ success: true, data: sessions });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 }
 
 export async function saveGuestScore(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const body = req.body as z.infer<typeof saveGuestSchema>;
     await scoreService.saveGuestScore({
-      username: body.username,
-      score: body.score,
-      mode: body.mode as GameMode,
-      tag: body.tag ?? null,
+      username: body.username, score: body.score,
+      mode: body.mode as GameMode, tag: body.tag ?? null,
       sessionId: body.session_id,
     });
     res.json({ success: true, data: { message: 'Score saved to leaderboard' } });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 }

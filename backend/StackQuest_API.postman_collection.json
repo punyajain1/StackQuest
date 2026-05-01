@@ -1,0 +1,446 @@
+{
+  "info": {
+    "name": "StackQuest API v2.0",
+    "description": "Comprehensive Postman collection for the StackQuest backend.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"testuser1\",\n  \"email\": \"test1@example.com\",\n  \"password\": \"password123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.environment.set(\"token\", jsonData.data.token);",
+                  "    pm.collectionVariables.set(\"token\", jsonData.data.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test1@example.com\",\n  \"password\": \"password123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.environment.set(\"token\", jsonData.data.token);",
+                  "    pm.collectionVariables.set(\"token\", jsonData.data.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Guest Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/auth/guest", "host": ["{{base_url}}"], "path": ["auth", "guest"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.environment.set(\"token\", jsonData.data.token);",
+                  "    pm.collectionVariables.set(\"token\", jsonData.data.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Current User (Me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/auth/me", "host": ["{{base_url}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"new_username\",\n  \"bio\": \"Hello World!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/auth/profile", "host": ["{{base_url}}"], "path": ["auth", "profile"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get My Full Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/users/me", "host": ["{{base_url}}"], "path": ["users", "me"] }
+          }
+        },
+        {
+          "name": "Search Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/users/search?q=test", "host": ["{{base_url}}"], "path": ["users", "search"], "query": [{ "key": "q", "value": "test" }] }
+          }
+        },
+        {
+          "name": "Get User Profile by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/users/:userId/profile", "host": ["{{base_url}}"], "path": ["users", ":userId", "profile"], "variable": [{ "key": "userId", "value": "USER_ID_HERE" }] }
+          }
+        },
+        {
+          "name": "Get User Achievements",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/users/:userId/achievements", "host": ["{{base_url}}"], "path": ["users", ":userId", "achievements"], "variable": [{ "key": "userId", "value": "USER_ID_HERE" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Friends",
+      "item": [
+        {
+          "name": "List Friends",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/friends", "host": ["{{base_url}}"], "path": ["friends"] }
+          }
+        },
+        {
+          "name": "List Pending Requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/friends/pending", "host": ["{{base_url}}"], "path": ["friends", "pending"] }
+          }
+        },
+        {
+          "name": "Send Friend Request",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"target_username\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/friends/request", "host": ["{{base_url}}"], "path": ["friends", "request"] }
+          }
+        },
+        {
+          "name": "Accept Friend Request",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/friends/:id/accept", "host": ["{{base_url}}"], "path": ["friends", ":id", "accept"], "variable": [{ "key": "id", "value": "FRIENDSHIP_ID" }] }
+          }
+        },
+        {
+          "name": "Reject Friend Request",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/friends/:id/reject", "host": ["{{base_url}}"], "path": ["friends", ":id", "reject"], "variable": [{ "key": "id", "value": "FRIENDSHIP_ID" }] }
+          }
+        },
+        {
+          "name": "Remove Friend",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/friends/:id", "host": ["{{base_url}}"], "path": ["friends", ":id"], "variable": [{ "key": "id", "value": "FRIENDSHIP_ID" }] }
+          }
+        },
+        {
+          "name": "Block User",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/friends/:id/block", "host": ["{{base_url}}"], "path": ["friends", ":id", "block"], "variable": [{ "key": "id", "value": "TARGET_USER_ID" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scores",
+      "item": [
+        {
+          "name": "Get Leaderboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/scores/leaderboard?mode=daily_challenge&period=all_time", "host": ["{{base_url}}"], "path": ["scores", "leaderboard"], "query": [{ "key": "mode", "value": "daily_challenge" }, { "key": "period", "value": "all_time" }] }
+          }
+        },
+        {
+          "name": "Get My Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/scores/stats", "host": ["{{base_url}}"], "path": ["scores", "stats"] }
+          }
+        },
+        {
+          "name": "Get My History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/scores/history", "host": ["{{base_url}}"], "path": ["scores", "history"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Duel (REST Fallback)",
+      "item": [
+        {
+          "name": "Create Duel Match",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tag\": \"javascript\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/duel/create", "host": ["{{base_url}}"], "path": ["duel", "create"] }
+          }
+        },
+        {
+          "name": "Join Duel Match (REST)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/duel/:id/join", "host": ["{{base_url}}"], "path": ["duel", ":id", "join"], "variable": [{ "key": "id", "value": "MATCH_ID" }] }
+          }
+        },
+        {
+          "name": "Get Match State",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/duel/:id/state", "host": ["{{base_url}}"], "path": ["duel", ":id", "state"], "variable": [{ "key": "id", "value": "MATCH_ID" }] }
+          }
+        },
+        {
+          "name": "Get Final Result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/duel/:id/result", "host": ["{{base_url}}"], "path": ["duel", ":id", "result"], "variable": [{ "key": "id", "value": "MATCH_ID" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Game (Solo / Puzzle REST)",
+      "item": [
+        {
+          "name": "Start Daily Challenge (REST)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/game/daily/start", "host": ["{{base_url}}"], "path": ["game", "daily", "start"] }
+          }
+        },
+        {
+          "name": "Get Daily Challenge Questions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/game/daily/questions", "host": ["{{base_url}}"], "path": ["game", "daily", "questions"] }
+          }
+        },
+        {
+          "name": "Start Puzzle",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tag\": \"python\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/game/puzzle/start", "host": ["{{base_url}}"], "path": ["game", "puzzle", "start"] }
+          }
+        },
+        {
+          "name": "Get Next Puzzle Question",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/game/question?session_id=SESSION_ID_HERE", "host": ["{{base_url}}"], "path": ["game", "question"], "query": [{ "key": "session_id", "value": "SESSION_ID_HERE" }] }
+          }
+        },
+        {
+          "name": "Submit Answer (REST)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"SESSION_ID_HERE\",\n  \"question_id\": 12345,\n  \"question_type\": \"mcq\",\n  \"player_choice\": \"python\",\n  \"time_taken_ms\": 5000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/game/answer", "host": ["{{base_url}}"], "path": ["game", "answer"] }
+          }
+        },
+        {
+          "name": "End Session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"SESSION_ID_HERE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/game/end", "host": ["{{base_url}}"], "path": ["game", "end"] }
+          }
+        },
+        {
+          "name": "Get Session Data",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/game/session/:id", "host": ["{{base_url}}"], "path": ["game", "session", ":id"], "variable": [{ "key": "id", "value": "SESSION_ID_HERE" }] }
+          }
+        },
+        {
+          "name": "Get Available Tags",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/game/categories", "host": ["{{base_url}}"], "path": ["game", "categories"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Stack Overflow (Proxy)",
+      "item": [
+        {
+          "name": "Get Cached SO Questions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/so/questions?tag=javascript", "host": ["{{base_url}}"], "path": ["so", "questions"], "query": [{ "key": "tag", "value": "javascript" }] }
+          }
+        },
+        {
+          "name": "Get Cached SO Answers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/so/answers/:questionId", "host": ["{{base_url}}"], "path": ["so", "answers", ":questionId"], "variable": [{ "key": "questionId", "value": "12345" }] }
+          }
+        },
+        {
+          "name": "Get SO Quota Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/so/quota", "host": ["{{base_url}}"], "path": ["so", "quota"] }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,40 +1,24 @@
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../config/prisma';
 import { questionService } from './question.service';
-import { evaluationService } from './evaluation.service';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
+import { env } from '../config/env';
+import { formatQuestion } from '../utils/questionFormatter';
+import { evaluateAnswer, calculateQuestionScore, calculateAnswerXP, calculateXPProgression, getSessionStartXP, getStreakMultiplier } from '../utils/stackquest.algorithm';
 import type { GameSession } from '../../generated/prisma';
 import type {
-  GameMode,
-  Difficulty,
-  SoQuestion,
-  GameQuestion,
-  SessionSnapshot,
-  EvaluationResult,
-  ScoreRange,
+  GameMode, Difficulty, QuestionType, SoQuestion,
+  GameQuestion, SessionSnapshot,
 } from '../models/db.types';
 
-// ─── Scoring Config ──────────────────────────────────────────
+// ─── Question type cycle ─────────────────────────────────────
 
-function getMultiplier(streak: number): number {
-  if (streak >= 13) return 5;
-  if (streak >= 10) return 3;
-  if (streak >= 5) return 2;
-  return 1;
+const QUESTION_TYPES: QuestionType[] = ['mcq', 'fill_in_blank', 'string_answer'];
+
+function pickQuestionType(): QuestionType {
+  return QUESTION_TYPES[Math.floor(Math.random() * QUESTION_TYPES.length)];
 }
-
-const BASE_POINTS: Record<GameMode, number> = {
-  judge: 10,
-  score_guesser: 15,
-  answer_arena: 0,
-  multiple_choice: 20,
-  tag_guesser: 12,
-};
-
-const XP_PER_CORRECT = 10;
-const XP_PER_GAME = 5;
-const TIME_BONUS_MAX = 10;
 
 // ─── In-memory active session state ─────────────────────────
 
@@ -51,7 +35,7 @@ interface ActiveSession {
   xp_earned: number;
   played_ids: number[];
   started_at: number;
-  is_daily: boolean;
+  preloaded_questions: SoQuestion[];
 }
 
 const activeSessions = new Map<string, ActiveSession>();
@@ -59,103 +43,95 @@ const activeSessions = new Map<string, ActiveSession>();
 // ─── Game Service ────────────────────────────────────────────
 
 export class GameService {
-  // ─── Start Session ────────────────────────────────────────
+  // ─── Daily Challenge ─────────────────────────────────────
 
-  async startSession(
-    userId: string,
-    mode: GameMode,
-    tag: string | null,
-    isDaily = false
-  ): Promise<SessionSnapshot> {
+  async startDailyChallenge(userId: string): Promise<SessionSnapshot> {
+    // Check if user already played today
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const existing = await prisma.gameSession.findFirst({
+      where: { userId, mode: 'daily_challenge', dailyDate: today },
+    });
+    if (existing) throw AppError.conflict('You already played today\'s daily challenge', 'DAILY_ALREADY_PLAYED');
+
+    const questions = await questionService.getDailyChallenge();
     const sessionId = uuidv4();
 
     const state: ActiveSession = {
-      session_id: sessionId,
-      user_id: userId,
-      mode,
-      tag,
-      score: 0,
-      streak: 0,
-      streak_peak: 0,
-      questions_answered: 0,
-      correct_count: 0,
-      xp_earned: XP_PER_GAME,
-      played_ids: [],
-      started_at: Date.now(),
-      is_daily: isDaily,
+      session_id: sessionId, user_id: userId, mode: 'daily_challenge',
+      tag: null, score: 0, streak: 0, streak_peak: 0,
+      questions_answered: 0, correct_count: 0, xp_earned: getSessionStartXP(),
+      played_ids: [], started_at: Date.now(), preloaded_questions: questions,
     };
 
     activeSessions.set(sessionId, state);
-
-    // Persist an initial session record so questionAnswers can FK to it
     await prisma.gameSession.create({
-      data: {
-        id: sessionId,
-        userId,
-        mode,
-        tag,
-        isDaily,
-      },
+      data: { id: sessionId, userId, mode: 'daily_challenge', dailyDate: today },
     });
 
-    logger.info({ sessionId, userId, mode, tag }, 'Game session started');
+    logger.info({ sessionId, userId }, 'Daily challenge started');
+    return this.buildSnapshot(state);
+  }
+
+  // ─── Puzzle ──────────────────────────────────────────────
+
+  async startPuzzle(userId: string, tag: string | null, difficulty: Difficulty | null): Promise<SessionSnapshot> {
+    const sessionId = uuidv4();
+    const state: ActiveSession = {
+      session_id: sessionId, user_id: userId, mode: 'puzzle',
+      tag, score: 0, streak: 0, streak_peak: 0,
+      questions_answered: 0, correct_count: 0, xp_earned: getSessionStartXP(),
+      played_ids: [], started_at: Date.now(), preloaded_questions: [],
+    };
+
+    activeSessions.set(sessionId, state);
+    await prisma.gameSession.create({
+      data: { id: sessionId, userId, mode: 'puzzle', tag },
+    });
+
+    logger.info({ sessionId, userId, tag, difficulty }, 'Puzzle session started');
     return this.buildSnapshot(state);
   }
 
   // ─── Get Next Question ────────────────────────────────────
 
-  async getNextQuestion(
-    sessionId: string,
-    difficulty?: Difficulty
-  ): Promise<GameQuestion> {
+  async getNextQuestion(sessionId: string, difficulty?: Difficulty): Promise<GameQuestion> {
     const session = this.getActiveSession(sessionId);
-    const question = await questionService.getNextQuestion({
-      tag: session.tag,
-      difficulty,
-      excludeIds: session.played_ids,
-      mode: session.mode,
-    });
-    return this.buildGameQuestion(question, session.mode);
+    let question: SoQuestion;
+
+    if (session.mode === 'daily_challenge' && session.preloaded_questions.length > 0) {
+      const idx = session.questions_answered;
+      if (idx >= session.preloaded_questions.length) {
+        throw AppError.badRequest('No more questions in this daily challenge');
+      }
+      question = session.preloaded_questions[idx];
+    } else {
+      question = await questionService.getNextQuestion({
+        tag: session.tag, difficulty, excludeIds: session.played_ids, requireAnswer: true,
+      });
+    }
+
+    const qType = pickQuestionType();
+    return this.buildGameQuestion(question, qType, session.preloaded_questions);
   }
 
-  private async buildGameQuestion(
-    question: SoQuestion,
-    mode: GameMode
-  ): Promise<GameQuestion> {
-    const base: GameQuestion = {
-      question,
-      mode,
-      timeLimit: mode === 'answer_arena' ? 120 : 30,
-    };
-
-    if (mode === 'multiple_choice') {
-      const sibling = await questionService.getNextQuestion({
-        excludeIds: [question.question_id],
-      });
-      const correctTag = question.tags[0] ?? 'unknown';
-      const distractors = sibling.tags.filter((t) => t !== correctTag).slice(0, 3);
-      base.options = this.shuffle([correctTag, ...distractors]).slice(0, 4);
-    }
-    return base;
+  private buildGameQuestion(
+    question: SoQuestion, qType: QuestionType, allQuestions: SoQuestion[]
+  ): GameQuestion {
+    return formatQuestion(question, qType, allQuestions);
   }
 
   // ─── Evaluate Answer ─────────────────────────────────────
 
   async evaluateAnswer(opts: {
-    sessionId: string;
-    questionId: number;
-    playerAnswer?: string;
-    playerChoice?: string;
-    timeTakenMs: number;
+    sessionId: string; questionId: number; questionType: QuestionType;
+    playerAnswer?: string; playerChoice?: string; timeTakenMs: number;
     question: SoQuestion;
   }): Promise<{
-    correct: boolean;
-    scoreEarned: number;
-    xpEarned: number;
-    evaluationResult?: EvaluationResult;
-    snapshot: SessionSnapshot;
+    correct: boolean; scoreEarned: number; xpEarned: number;
+    feedback?: string; snapshot: SessionSnapshot;
   }> {
-    const { sessionId, questionId, playerAnswer, playerChoice, timeTakenMs, question } = opts;
+    const { sessionId, questionId, questionType, playerAnswer, playerChoice, timeTakenMs, question } = opts;
     const session = this.getActiveSession(sessionId);
 
     if (session.played_ids.includes(questionId)) {
@@ -165,51 +141,51 @@ export class GameService {
     let correct = false;
     let scoreEarned = 0;
     let xpEarned = 0;
-    let evaluationResult: EvaluationResult | undefined;
+    let feedback: string | undefined;
 
-    const multiplier = getMultiplier(session.streak);
-    const timeBonusFactor = Math.max(0, 1 - timeTakenMs / 30000);
-    const timeBonus = Math.round(TIME_BONUS_MAX * timeBonusFactor);
+    let evalResult;
+    const qTypeAlg = questionType === 'fill_in_blank' ? 'fill_in_the_blank' : questionType;
 
-    switch (session.mode) {
-      case 'judge': {
-        const isPositive = question.score > 0;
-        correct = playerChoice === (isPositive ? 'upvote' : 'downvote');
-        if (correct) scoreEarned = (BASE_POINTS.judge + timeBonus) * multiplier;
+    switch (questionType) {
+      case 'mcq': {
+        if (!playerChoice) throw AppError.badRequest('playerChoice required for MCQ');
+        const formatted = formatQuestion(question, 'mcq', []);
+        evalResult = evaluateAnswer('mcq', playerChoice, formatted.correct_answer);
         break;
       }
-      case 'score_guesser': {
-        const range = this.scoreToRange(question.score);
-        correct = playerChoice === range;
-        if (correct) scoreEarned = (BASE_POINTS.score_guesser + timeBonus) * multiplier;
+      case 'fill_in_blank': {
+        if (!playerAnswer) throw AppError.badRequest('playerAnswer required for fill_in_blank');
+        const formatted = formatQuestion(question, 'fill_in_blank', []);
+        evalResult = evaluateAnswer('fill_in_the_blank', playerAnswer, formatted.correct_answer);
         break;
       }
-      case 'answer_arena': {
-        if (!playerAnswer) throw AppError.badRequest('playerAnswer required for answer_arena');
-        const ref = question.top_answer_text ?? question.body_markdown;
-        try {
-          evaluationResult = await evaluationService.evaluateAnswer(playerAnswer, ref);
-        } catch {
-          evaluationResult = evaluationService.evaluateAnswerFallback(playerAnswer, ref);
-        }
-        correct = evaluationResult.similarity >= 0.5;
-        scoreEarned = evaluationResult.points * multiplier;
-        xpEarned = Math.round(evaluationResult.similarity * 20);
-        break;
-      }
-      case 'multiple_choice': {
-        correct = playerChoice === question.tags[0];
-        if (correct) scoreEarned = (BASE_POINTS.multiple_choice + timeBonus) * multiplier;
-        break;
-      }
-      case 'tag_guesser': {
-        correct = playerChoice !== undefined && question.tags.includes(playerChoice);
-        if (correct) scoreEarned = (BASE_POINTS.tag_guesser + timeBonus) * multiplier;
+      case 'string_answer': {
+        if (!playerAnswer) throw AppError.badRequest('playerAnswer required for string_answer');
+        const formatted = formatQuestion(question, 'string_answer', []);
+        evalResult = evaluateAnswer('string_answer', playerAnswer, formatted.correct_answer);
         break;
       }
     }
 
-    if (xpEarned === 0) xpEarned = correct ? XP_PER_CORRECT : 0;
+    if (!evalResult) throw AppError.internal('Failed to evaluate answer');
+
+    correct = evalResult.isCorrect;
+    feedback = evalResult.details;
+
+    const scoreResult = calculateQuestionScore(
+      qTypeAlg,
+      correct,
+      timeTakenMs,
+      session.streak,
+      evalResult.similarityRatio
+    );
+    scoreEarned = scoreResult.totalScore;
+    
+    xpEarned = calculateAnswerXP(
+      qTypeAlg,
+      correct,
+      evalResult.similarityRatio
+    );
 
     // Update in-memory state
     session.played_ids.push(questionId);
@@ -225,23 +201,16 @@ export class GameService {
       session.streak = 0;
     }
 
-    // Persist individual move
+    // Persist individual answer
     await prisma.questionAnswer.create({
       data: {
-        sessionId,
-        soQuestionId: questionId,
-        mode: session.mode,
-        playerAnswer: playerAnswer ?? null,
-        playerChoice: playerChoice ?? null,
-        correct,
-        scoreEarned,
-        xpEarned,
-        similarityScore: evaluationResult?.similarity ?? null,
-        timeTakenMs,
+        sessionId, soQuestionId: questionId, questionType,
+        playerAnswer: playerAnswer ?? null, playerChoice: playerChoice ?? null,
+        correct, scoreEarned, xpEarned, timeTakenMs,
       },
     });
 
-    return { correct, scoreEarned, xpEarned, evaluationResult, snapshot: this.buildSnapshot(session) };
+    return { correct, scoreEarned, xpEarned, feedback, snapshot: this.buildSnapshot(session) };
   }
 
   // ─── End Session ─────────────────────────────────────────
@@ -249,60 +218,47 @@ export class GameService {
   async endSession(sessionId: string): Promise<GameSession> {
     const session = this.getActiveSession(sessionId);
     const durationSecs = Math.round((Date.now() - session.started_at) / 1000);
-    const accuracy =
-      session.questions_answered > 0
-        ? session.correct_count / session.questions_answered
-        : 0;
+    const accuracy = session.questions_answered > 0
+      ? session.correct_count / session.questions_answered : 0;
 
-    // Finalize DB session record
     const finalSession = await prisma.gameSession.update({
       where: { id: sessionId },
       data: {
-        score: session.score,
-        accuracy,
-        streakPeak: session.streak_peak,
-        questionsCount: session.questions_answered,
-        correctCount: session.correct_count,
-        durationSecs,
-        xpEarned: session.xp_earned,
+        score: session.score, accuracy, streakPeak: session.streak_peak,
+        questionsCount: session.questions_answered, correctCount: session.correct_count,
+        durationSecs, xpEarned: session.xp_earned,
       },
     });
 
-    // Update user XP + streak record (compute level in app code)
+    // Update user XP + streak
     const currentUser = await prisma.user.findUnique({
       where: { id: session.user_id },
-      select: { xp: true, streakRecord: true },
+      select: { xp: true, maxStreak: true },
     });
 
     const newXp = (currentUser?.xp ?? 0) + session.xp_earned;
-    const newLevel = Math.floor(Math.sqrt(newXp / 100)) + 1;
-    const newStreakRecord = Math.max(currentUser?.streakRecord ?? 0, session.streak_peak);
+    const progression = calculateXPProgression(newXp);
+    const newLevel = progression.level;
+    const newMaxStreak = Math.max(currentUser?.maxStreak ?? 0, session.streak_peak);
 
     await prisma.user.update({
       where: { id: session.user_id },
       data: {
-        xp: newXp,
-        level: newLevel,
-        streakRecord: newStreakRecord,
-        totalGames: { increment: 1 },
-        lastActive: new Date(),
+        xp: newXp, level: newLevel, maxStreak: newMaxStreak,
+        totalGames: { increment: 1 }, lastActive: new Date(),
       },
     });
 
     // Leaderboard entry
     const user = await prisma.user.findUnique({
-      where: { id: session.user_id },
-      select: { username: true },
+      where: { id: session.user_id }, select: { username: true },
     });
 
     await prisma.leaderboardEntry.create({
       data: {
-        sessionId,
-        userId: session.user_id,
-        username: user?.username ?? 'Guest',
-        score: session.score,
-        mode: session.mode,
-        tag: session.tag,
+        sessionId, userId: session.user_id,
+        username: user?.username ?? 'Guest', score: session.score,
+        mode: session.mode, tag: session.tag,
         periodWeek: this.getISOWeek(new Date()),
       },
     });
@@ -322,35 +278,18 @@ export class GameService {
 
   private buildSnapshot(session: ActiveSession): SessionSnapshot {
     return {
-      session_id: session.session_id,
-      score: session.score,
-      streak: session.streak,
-      streak_multiplier: getMultiplier(session.streak),
+      session_id: session.session_id, score: session.score,
+      streak: session.streak, streak_multiplier: getStreakMultiplier(session.streak),
       questions_answered: session.questions_answered,
-      correct_count: session.correct_count,
-      xp_earned: session.xp_earned,
+      correct_count: session.correct_count, xp_earned: session.xp_earned,
     };
   }
 
-  private scoreToRange(score: number): ScoreRange {
-    if (score >= 500) return '500+';
-    if (score >= 100) return '100-500';
-    if (score >= 10) return '10-100';
-    return '0-10';
-  }
-
-  private shuffle<T>(arr: T[]): T[] {
-    return arr.map((v) => ({ v, sort: Math.random() })).sort((a, b) => a.sort - b.sort).map(({ v }) => v);
-  }
-
   private getISOWeek(date: Date): string {
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
     const week1 = new Date(d.getFullYear(), 0, 4);
-    const weekNum = 1 + Math.round(
-      ((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7
-    );
+    const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
     return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
   }
 

@@ -1,166 +1,44 @@
-import axios from 'axios';
-import { env } from '../config/env';
 import { logger } from '../utils/logger';
-import { AppError } from '../utils/AppError';
 import type { EvaluationResult } from '../models/db.types';
 
-interface HFFeatureExtractionResponse {
-  error?: string;
-  estimated_time?: number;
-}
-
 /**
- * Compute cosine similarity between two embedding vectors.
+ * Evaluation service — handles answer checking for all question types.
+ * No external API dependencies (HuggingFace removed).
  */
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) return 0;
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-/**
- * Map similarity score to gameplay label and feedback.
- */
-function scoreToLabel(sim: number): Omit<EvaluationResult, 'similarity'> {
-  if (sim >= 0.85)
-    return {
-      points: 60,
-      label: 'excellent',
-      feedback: '🎯 Excellent! Your answer closely matches the accepted solution.',
-    };
-  if (sim >= 0.70)
-    return {
-      points: 40,
-      label: 'great',
-      feedback: '✅ Great! You captured the key concepts well.',
-    };
-  if (sim >= 0.50)
-    return {
-      points: 25,
-      label: 'good',
-      feedback: '👍 Good attempt! You got some important points.',
-    };
-  if (sim >= 0.30)
-    return {
-      points: 10,
-      label: 'partial',
-      feedback: '🤔 Partial credit. You were on the right track.',
-    };
-  return {
-    points: 0,
-    label: 'off',
-    feedback: '❌ Your answer was quite different from the accepted solution.',
-  };
-}
-
 class EvaluationService {
-  private hfApiUrl: string;
-
-  constructor() {
-    this.hfApiUrl = `https://api-inference.huggingface.co/models/${env.HF_MODEL}`;
+  /** Evaluate MCQ: simple equality check. */
+  evaluateMCQ(playerChoice: string, correctAnswer: string): { correct: boolean } {
+    return { correct: playerChoice.toLowerCase().trim() === correctAnswer.toLowerCase().trim() };
   }
 
-  /**
-   * Get sentence embeddings from HuggingFace Inference API.
-   * Handles "model loading" responses with retry.
-   */
-  private async getEmbeddings(texts: string[]): Promise<number[][]> {
-    const maxRetries = 3;
-    let attempt = 0;
+  /** Evaluate fill-in-blank: exact or fuzzy match. */
+  evaluateFillInBlank(playerAnswer: string, correctAnswer: string): { correct: boolean; similarity: number } {
+    const player = playerAnswer.toLowerCase().trim();
+    const correct = correctAnswer.toLowerCase().trim();
 
-    while (attempt < maxRetries) {
-      try {
-        const response = await axios.post(
-          this.hfApiUrl,
-          { inputs: texts, options: { wait_for_model: true } },
-          {
-            headers: {
-              Authorization: `Bearer ${env.HUGGINGFACE_API_KEY}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 30000,
-          }
-        );
+    // Exact match
+    if (player === correct) return { correct: true, similarity: 1.0 };
 
-        const data = response.data as number[][] | HFFeatureExtractionResponse;
-
-        // Model loading response
-        if (!Array.isArray(data) && data.error) {
-          const wait = (data.estimated_time ?? 20) * 1000;
-          logger.info({ attempt, wait }, 'HF model loading, waiting...');
-          await new Promise((r) => setTimeout(r, wait));
-          attempt++;
-          continue;
-        }
-
-        return data as number[][];
-      } catch (err) {
-        logger.error({ err, attempt }, 'HuggingFace embedding request failed');
-        if (attempt === maxRetries - 1) {
-          throw new AppError(
-            'Answer evaluation service temporarily unavailable',
-            503,
-            'HF_UNAVAILABLE'
-          );
-        }
-        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-        attempt++;
-      }
+    // Contains match (answer is within the player's response)
+    if (player.includes(correct) || correct.includes(player)) {
+      return { correct: true, similarity: 0.8 };
     }
 
-    throw new AppError('Failed to get embeddings after retries', 503, 'HF_RETRY_EXHAUSTED');
+    // Levenshtein-based fuzzy match for typos
+    const distance = this.levenshtein(player, correct);
+    const maxLen = Math.max(player.length, correct.length);
+    const similarity = maxLen > 0 ? 1 - distance / maxLen : 0;
+
+    return { correct: similarity >= 0.7, similarity };
   }
 
-  /**
-   * Evaluate a player's answer against the reference (accepted SO answer).
-   * Returns similarity score (0–1), points earned, label, and feedback.
-   */
-  async evaluateAnswer(
-    playerAnswer: string,
-    referenceAnswer: string
-  ): Promise<EvaluationResult> {
-    // Minimum length check
+  /** Evaluate string answer: keyword overlap scoring. */
+  evaluateStringAnswer(playerAnswer: string, referenceAnswer: string): EvaluationResult {
     if (playerAnswer.trim().length < 10) {
-      return {
-        similarity: 0,
-        points: 0,
-        label: 'off',
-        feedback: '✍️ Your answer is too short to evaluate. Try to be more detailed.',
-      };
+      return { similarity: 0, points: 0, label: 'off', feedback: '✍️ Your answer is too short to evaluate.' };
     }
 
-    // Truncate to avoid token limits
-    const playerTrimmed = playerAnswer.slice(0, 512);
-    const refTrimmed = referenceAnswer.slice(0, 512);
-
-    const embeddings = await this.getEmbeddings([playerTrimmed, refTrimmed]);
-    const similarity = cosineSimilarity(embeddings[0], embeddings[1]);
-    const result = scoreToLabel(similarity);
-
-    logger.debug({ similarity, label: result.label }, 'Answer evaluated');
-
-    return { similarity, ...result };
-  }
-
-  /**
-   * Keyword-based fallback evaluation (no API call).
-   * Used when HuggingFace is unavailable.
-   */
-  evaluateAnswerFallback(
-    playerAnswer: string,
-    referenceAnswer: string
-  ): EvaluationResult {
-    const normalize = (s: string) =>
-      s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
-
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
     const playerWords = new Set(normalize(playerAnswer));
     const refWords = normalize(referenceAnswer);
 
@@ -170,7 +48,35 @@ class EvaluationService {
 
     const intersection = refWords.filter((w) => playerWords.has(w));
     const similarity = intersection.length / refWords.length;
-    return { similarity, ...scoreToLabel(similarity) };
+
+    logger.debug({ similarity }, 'String answer evaluated');
+    return { similarity, ...this.scoreToLabel(similarity) };
+  }
+
+  private scoreToLabel(sim: number): Omit<EvaluationResult, 'similarity'> {
+    if (sim >= 0.85) return { points: 60, label: 'excellent', feedback: '🎯 Excellent! Your answer closely matches the solution.' };
+    if (sim >= 0.70) return { points: 40, label: 'great', feedback: '✅ Great! You captured the key concepts.' };
+    if (sim >= 0.50) return { points: 25, label: 'good', feedback: '👍 Good attempt! You got some important points.' };
+    if (sim >= 0.30) return { points: 10, label: 'partial', feedback: '🤔 Partial credit. You were on the right track.' };
+    return { points: 0, label: 'off', feedback: '❌ Your answer was quite different from the solution.' };
+  }
+
+  private levenshtein(a: string, b: string): number {
+    const m = a.length, n = b.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, (_, i) => {
+      const row = Array(n + 1).fill(0);
+      row[0] = i;
+      return row;
+    });
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        dp[i][j] = a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      }
+    }
+    return dp[m][n];
   }
 }
 

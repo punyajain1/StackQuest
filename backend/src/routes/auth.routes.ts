@@ -3,7 +3,7 @@ import { validate } from '../middleware/validate.middleware';
 import { requireAuth } from '../middleware/auth.middleware';
 import { authLimiter } from '../middleware/rateLimit.middleware';
 import {
-  register, login, createGuest, refresh, getMe,
+  register, login, createGuest, refresh, getMe, updateProfile,
   authSchemas,
 } from '../controllers/auth.controller';
 
@@ -54,9 +54,6 @@ router.post('/login', authLimiter, validate(authSchemas.loginSchema), login);
  *   post:
  *     summary: Create a guest session (no email required)
  *     tags: [Auth]
- *     responses:
- *       201:
- *         description: Guest user created with JWT tokens
  */
 router.post('/guest', authLimiter, createGuest);
 
@@ -79,5 +76,16 @@ router.post('/refresh', validate(authSchemas.refreshSchema), refresh);
  *       - bearerAuth: []
  */
 router.get('/me', requireAuth, getMe);
+
+/**
+ * @swagger
+ * /api/auth/profile:
+ *   patch:
+ *     summary: Update user profile (username, avatar, bio)
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.patch('/profile', requireAuth, validate(authSchemas.updateProfileSchema), updateProfile);
 
 export default router;

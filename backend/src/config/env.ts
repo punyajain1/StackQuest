@@ -22,14 +22,15 @@ const envSchema = z.object({
   SO_API_BASE: z.string().url().default('https://api.stackexchange.com/2.3'),
   SO_SITE: z.string().default('stackoverflow'),
 
-  // HuggingFace
-  HUGGINGFACE_API_KEY: z.string().min(1, 'HUGGINGFACE_API_KEY is required'),
-  HF_MODEL: z.string().default('sentence-transformers/all-MiniLM-L6-v2'),
-
   // Game Config
   QUESTION_POOL_MIN: z.string().default('50').transform(Number),
   QUESTION_POOL_REFRESH_HOURS: z.string().default('6').transform(Number),
   CACHE_TTL_SECONDS: z.string().default('86400').transform(Number),
+
+  // Duel Config
+  DUEL_ROUNDS: z.string().default('5').transform(Number),
+  DUEL_TIME_LIMIT_SECS: z.string().default('30').transform(Number),
+  DAILY_QUESTION_COUNT: z.string().default('10').transform(Number),
 });
 
 const parsed = envSchema.safeParse(process.env);
