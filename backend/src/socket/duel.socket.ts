@@ -145,6 +145,8 @@ async function broadcastRoundResult(
   namespace.to(`duel:${matchId}`).emit(DUEL.ROUND_RESULT, {
     round_number: roundNumber,
     correct_answer: correctAnswer,
+    player1_id: match.player1Id,
+    player2_id: match.player2Id,
     player1_correct: duelQ.player1Correct ?? false,
     player2_correct: duelQ.player2Correct ?? false,
     player1_score: match.player1Score,
@@ -161,6 +163,10 @@ async function broadcastRoundResult(
       const result = await duelService.getDuelResult(matchId);
       namespace.to(`duel:${matchId}`).emit(DUEL.COMPLETE, result);
 
+      // Cleanup caches
+      matchesStarted.delete(matchId);
+      matchStateCache.delete(matchId);
+
       // Award achievements to both players
       if (match.player1Id) achievementService.checkAndAward(match.player1Id).catch(() => {});
       if (match.player2Id) achievementService.checkAndAward(match.player2Id).catch(() => {});
@@ -176,6 +182,9 @@ interface MatchState {
   pool: SoQuestion[];
 }
 const matchStateCache = new Map<string, MatchState>();
+
+// Tracks which matches have already started broadcasting to prevent race conditions
+const matchesStarted = new Set<string>();
 
 // ─── Matchmaking queue (league-based) ─────────────────────────────────────────
 
@@ -247,9 +256,12 @@ export function registerDuelHandlers(namespace: Namespace): void {
         });
 
         // If match is active (both players joined) and no questions emitted yet — start round 1
-        if (match.status === 'active') {
+        if (match.status === 'active' && !matchesStarted.has(match_id)) {
           const roomSockets = await namespace.in(`duel:${match_id}`).fetchSockets();
           if (roomSockets.length >= 2) {
+            // Mark match as started to prevent double-broadcast
+            matchesStarted.add(match_id);
+
             // Load or reuse pre-generated questions
             if (!matchStateCache.has(match_id)) {
               const dbQuestions = await prisma.duelQuestion.findMany({

@@ -57,6 +57,7 @@ export default function DuelScreen() {
   const [isConnecting, setIsConnecting] = useState(true);
   const [socket, setSocket] = useState(null);
   const questionStartTime = useRef(0);
+  const myPlayerSlot = useRef(null); // 'player1' or 'player2'
 
   // Animations
   const confettiAnim = useRef(new Animated.Value(0)).current;
@@ -87,7 +88,18 @@ export default function DuelScreen() {
 
         currentSocket.on("duel:state", (state) => {
           setIsConnecting(false);
-          // Initial state setup if needed
+          // Determine if I am player1 or player2
+          if (state.player1?.user_id === user?.id) {
+            myPlayerSlot.current = 'player1';
+          } else if (state.player2?.user_id === user?.id) {
+            myPlayerSlot.current = 'player2';
+          }
+          // Set opponent info from state
+          const opponentData = myPlayerSlot.current === 'player1' ? state.player2 : state.player1;
+          if (opponentData) {
+            setOpponentName(opponentData.username);
+            setOpponentElo(opponentData.elo || 1000);
+          }
         });
 
         currentSocket.on("duel:opponent_ready", (data) => {
@@ -114,18 +126,26 @@ export default function DuelScreen() {
         });
 
         currentSocket.on("duel:round_result", (data) => {
-          const didPlayerWinRound = data.who_correct === "player" || data.who_correct === user?.username || data.is_correct;
-          setIsCorrect(didPlayerWinRound);
-          setCorrectAnswerStr(data.correct_answer);
-          
-          if (data.scores) {
-            setPlayerScore(data.scores.player || data.scores[user?.username] || playerScore);
-            setOpponentScore(data.scores.opponent || opponentScore);
+          // Determine which player slot I am
+          let slot = myPlayerSlot.current;
+          if (!slot) {
+            // Fallback: determine from player IDs in the result
+            if (data.player1_id === user?.id) slot = 'player1';
+            else slot = 'player2';
+            myPlayerSlot.current = slot;
           }
-          
+
+          const iAmCorrect = slot === 'player1' ? data.player1_correct : data.player2_correct;
+          const myScore = slot === 'player1' ? data.player1_score : data.player2_score;
+          const theirScore = slot === 'player1' ? data.player2_score : data.player1_score;
+
+          setIsCorrect(iAmCorrect);
+          setCorrectAnswerStr(data.correct_answer);
+          setPlayerScore(myScore);
+          setOpponentScore(theirScore);
           setShowResult(true);
           
-          if (didPlayerWinRound) {
+          if (iAmCorrect) {
             setStreak((s) => s + 1);
             playConfetti();
             playStreakAnim();
@@ -137,17 +157,22 @@ export default function DuelScreen() {
 
         currentSocket.on("duel:complete", (data) => {
           setGameOver(true);
+          
+          // Determine if I won
+          const slot = myPlayerSlot.current;
+          const myResult = slot === 'player1' ? data.player1 : data.player2;
+          const didWin = data.winner_id === user?.id;
+          
           setFinalResult({
-            won: data.winner === user?.username || data.winner === "player",
-            eloChange: data.elo_change || data.eloChange || 0,
-            newElo: (playerElo + (data.elo_change || data.eloChange || 0)),
-            finalScoreTally: data.final_score_tally
+            won: didWin,
+            eloChange: myResult?.elo_change || 0,
+            newElo: myResult?.new_elo || playerElo,
+            finalScoreTally: null,
           });
         });
 
         currentSocket.on("duel:error", (err) => {
           console.error("Duel Error:", err);
-          // Optionally show error to user
         });
 
       } catch (err) {
