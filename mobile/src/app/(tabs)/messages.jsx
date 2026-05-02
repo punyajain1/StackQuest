@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert } from "react-native";
+import { useQuery } from '@tanstack/react-query';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search, Plus, UserPlus } from "lucide-react-native";
 import api from "@/utils/api";
+import { useRouter } from "expo-router";
 
 export default function Friends() {
+  const router = useRouter();
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [friendUsername, setFriendUsername] = useState("");
 
@@ -20,27 +23,11 @@ export default function Friends() {
     }
   };
   const insets = useSafeAreaInsets();
-  const [friends, setFriends] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchFriends();
-  }, []);
-
-  const fetchFriends = async () => {
-    try {
-      setLoading(true);
-      const res = await api.Friends.getFriends();
-      // Assuming backend wraps response in { success: true, data: [...] }
-      // api.js fetchAPI already returns the full JSON. If it's wrapped, extract it:
-      const friendsList = res.data || res || [];
-      setFriends(friendsList);
-    } catch (err) {
-      console.error("Failed to fetch friends:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  
+  const { data: friends = [], isLoading: loading } = useQuery({
+    queryKey: ['friends'],
+    queryFn: () => api.Friends.getFriends().then(res => res.data || res || [])
+  });
 
   const isOnline = (lastActive) => {
     if (!lastActive) return false;
@@ -59,8 +46,9 @@ export default function Friends() {
     return `${Math.floor(hours / 24)}d`;
   };
 
-  const FriendItem = ({ name, status, online, time }) => (
+  const FriendItem = ({ id, name, status, online, time }) => (
     <TouchableOpacity
+      onPress={() => router.push(`/user/${id}`)}
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -175,6 +163,7 @@ export default function Friends() {
               {onlineFriends.map((f, i) => (
                 <FriendItem
                   key={i}
+                  id={f.id}
                   name={f.username}
                   status={`Elo: ${f.elo}`}
                   online={true}
@@ -200,6 +189,7 @@ export default function Friends() {
               {offlineFriends.map((f, i) => (
                 <FriendItem
                   key={i}
+                  id={f.id}
                   name={f.username}
                   status={`Elo: ${f.elo}`}
                   online={false}

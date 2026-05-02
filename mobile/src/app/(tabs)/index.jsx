@@ -7,33 +7,24 @@ import { useUser } from "@/utils/auth/useUser";
 import api from "@/utils/api";
 import { ActivityIndicator } from "react-native";
 
+import { useQuery } from '@tanstack/react-query';
+
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useUser();
 
-  
-  const [profileData, setProfileData] = useState(null);
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: profileData, isLoading: profileLoading } = useQuery({
+    queryKey: ['myProfile'],
+    queryFn: () => api.Users.getMyProfile().then(res => res.data || res)
+  });
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [profileRes, lbRes] = await Promise.all([
-          api.Users.getMyProfile(),
-          api.Scores.getLeaderboard({ limit: 3 })
-        ]);
-        setProfileData(profileRes.data || profileRes);
-        setLeaderboard(lbRes.data || lbRes || []);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
+  const { data: leaderboard = [], isLoading: lbLoading } = useQuery({
+    queryKey: ['leaderboard', { limit: 3 }],
+    queryFn: () => api.Scores.getLeaderboard({ limit: 3 }).then(res => res.data || res || [])
+  });
+
+  const loading = profileLoading || lbLoading;
 
   const GameCard = ({ title, subtitle, icon: Icon, color, onPress, badge }) => (
     <TouchableOpacity
@@ -131,7 +122,7 @@ export default function Home() {
             </Text>
             <Text style={{ color: "#666", fontSize: 16 }}>Welcome back,</Text>
             <Text style={{ color: "#fff", fontSize: 24, fontWeight: "800" }}>
-              {user?.username || "Challenger"}
+              {profileData?.username || user?.username || "Challenger"}
             </Text>
           </View>
           <TouchableOpacity
@@ -147,7 +138,7 @@ export default function Home() {
           >
             <Image
               source={{
-                uri: `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.username || "default"}`,
+                uri: `https://api.dicebear.com/7.x/avataaars/svg?seed=${profileData?.username || user?.username || "default"}`,
               }}
               style={{ width: "100%", height: "100%", borderRadius: 24 }}
             />

@@ -34,7 +34,6 @@ import { useSQAuth } from "@/utils/sqAuth";
 import { useRouter } from "expo-router";
 import api from "@/utils/api";
 import { ActivityIndicator } from "react-native";
-import { useQuery } from '@tanstack/react-query';
 
 const LEAGUE_COLORS = {
   Bronze: "#CD7F32",
@@ -46,7 +45,9 @@ const LEAGUE_COLORS = {
   Legend: "#FF3B30",
 };
 
-export default function Profile() {
+import { useLocalSearchParams } from 'expo-router';
+export default function PublicProfile() {
+  const { id } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const { user } = useUser();
   const router = useRouter();
@@ -67,17 +68,26 @@ export default function Profile() {
   const cardScale = useRef(new Animated.Value(0.96)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
-  const { data: profileData, isLoading: profileLoading } = useQuery({
-    queryKey: ['myProfile'],
-    queryFn: () => api.Users.getMyProfile().then(res => res.data || res)
-  });
+  
+  const [profileData, setProfileData] = useState(null);
+  const [achievements, setAchievements] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const { data: achievements = [], isLoading: achLoading } = useQuery({
-    queryKey: ['myAchievements'],
-    queryFn: () => api.Users.getAchievements().then(res => res.data || res || [])
-  });
-
-  const loading = profileLoading || achLoading;
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const profileRes = await api.Users.getPublicProfile(id);
+        const achRes = await api.Users.getAchievements(id);
+        setProfileData(profileRes.data || profileRes);
+        setAchievements(achRes.data || achRes || []);
+      } catch (err) {
+        console.error("Failed to load profile:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfile();
+  }, []);
 
   const league = profileData?.league ? profileData.league.charAt(0).toUpperCase() + profileData.league.slice(1) : "Gold";
   const leagueColor = LEAGUE_COLORS[league] || "#FFD700";
@@ -305,114 +315,7 @@ export default function Profile() {
   return (
     <View style={{ flex: 1, backgroundColor: "#000", paddingTop: insets.top }}>
       {loading ? <View style={{flex:1, justifyContent:'center', alignItems:'center'}}><ActivityIndicator color="#FFD700" /></View> : <>
-      {/* Edit Modal */}
-      <Modal visible={editModalVisible} animationType="slide" transparent>
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.92)",
-            justifyContent: "flex-end",
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: "#0d0d0d",
-              borderRadius: 28,
-              padding: 28,
-              borderWidth: 1,
-              borderColor: "#222",
-              paddingBottom: insets.bottom + 28,
-            }}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                marginBottom: 24,
-              }}
-            >
-              <Text style={{ color: "#fff", fontSize: 20, fontWeight: "800" }}>
-                Edit Profile
-              </Text>
-              <TouchableOpacity onPress={() => setEditModalVisible(false)}>
-                <X color="#666" size={22} />
-              </TouchableOpacity>
-            </View>
-
-            {[
-              /*{
-                label: "Instagram",
-                value: draftInstagram,
-                setter: setDraftInstagram,
-                placeholder: "@your_insta",
-              },
-              {
-                label: "X (Twitter)",
-                value: draftTwitter,
-                setter: setDraftTwitter,
-                placeholder: "@your_x",
-              },
-              {
-                label: "Organization",
-                value: draftOrg,
-                setter: setDraftOrg,
-                placeholder: "Company / University",
-              },*/
-              {
-                label: "Bio",
-                value: draftBio,
-                setter: setDraftBio,
-                placeholder: "Tell coders who you are...",
-              },
-            ].map((field) => (
-              <View key={field.label} style={{ marginBottom: 14 }}>
-                <Text
-                  style={{
-                    color: "#666",
-                    fontSize: 11,
-                    fontWeight: "700",
-                    letterSpacing: 1,
-                    marginBottom: 6,
-                  }}
-                >
-                  {field.label.toUpperCase()}
-                </Text>
-                <TextInput
-                  value={field.value}
-                  onChangeText={field.setter}
-                  placeholder={field.placeholder}
-                  placeholderTextColor="#444"
-                  style={{
-                    backgroundColor: "#111",
-                    borderRadius: 14,
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
-                    color: "#fff",
-                    fontSize: 15,
-                    borderWidth: 1,
-                    borderColor: "#222",
-                  }}
-                />
-              </View>
-            ))}
-
-            <TouchableOpacity
-              onPress={saveProfile}
-              style={{
-                backgroundColor: "#FFD700",
-                paddingVertical: 16,
-                borderRadius: 16,
-                alignItems: "center",
-                marginTop: 8,
-              }}
-            >
-              <Text style={{ color: "#000", fontWeight: "900", fontSize: 16 }}>
-                Save Changes
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      
 
       {/* Header */}
       <View
@@ -434,50 +337,7 @@ export default function Profile() {
         >
           PROFILE
         </Text>
-        <View style={{ flexDirection: "row" }}>
-          <TouchableOpacity
-            onPress={async () => {
-              await useSQAuth.getState().signOut();
-              router.replace("/auth/login");
-            }}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              backgroundColor: "#ff3b3020",
-              padding: 10,
-              borderRadius: 12,
-              borderWidth: 1,
-              borderColor: "#ff3b3060",
-              marginRight: 8,
-            }}
-          >
-            <LogOut color="#ff3b30" size={16} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              setDraftInstagram(instagramHandle);
-              setDraftTwitter(twitterHandle);
-              setDraftOrg(organization);
-              setDraftBio(bio);
-              setEditModalVisible(true);
-            }}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              backgroundColor: "#111",
-              padding: 10,
-              borderRadius: 12,
-              borderWidth: 1,
-              borderColor: "#222",
-            }}
-          >
-            <Edit3 color="#fff" size={16} style={{ marginRight: 6 }} />
-            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>
-              Edit
-            </Text>
-          </TouchableOpacity>
         </View>
-      </View>
 
       <ScrollView
         style={{ flex: 1 }}

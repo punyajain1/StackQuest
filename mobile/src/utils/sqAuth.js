@@ -38,8 +38,8 @@ export const useSQAuth = create((set, get) => ({
   },
 
   // Clear auth state
-  signOut: () => {
-    SecureStore.deleteItemAsync(KEY);
+  signOut: async () => {
+    await SecureStore.deleteItemAsync(KEY);
     set({ token: null, user: null });
   },
 

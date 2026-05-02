@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useQuery } from '@tanstack/react-query';
 import {
   View,
   Text,
@@ -39,23 +40,12 @@ export default function DuelsLobby() {
   const router = useRouter();
   const { user } = useUser();
 
-  const [recentMatches, setRecentMatches] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [onlineCount, setOnlineCount] = useState(Math.floor(Math.random() * 500) + 100);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const profileRes = await api.Users.getMyProfile();
-        setRecentMatches((profileRes.data || profileRes).recent_matches || []);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
+  const { data: profileData, isLoading: loading } = useQuery({
+    queryKey: ['myProfile'],
+    queryFn: () => api.Users.getMyProfile().then(res => res.data || res)
+  });
+  const recentMatches = profileData?.recent_matches || [];
+  const [onlineCount] = useState(Math.floor(Math.random() * 500) + 100);
 
   const [isSearching, setIsSearching] = useState(false);
   const [dotIndex, setDotIndex] = useState(0);
@@ -156,8 +146,8 @@ export default function DuelsLobby() {
         router.push({
           pathname: "/game/vs-screen",
           params: {
-            myUsername: user?.username || "You",
-            myElo: "1248",
+            myUsername: profileData?.username || user?.username || "You",
+            myElo: String(profileData?.elo || 1200),
             opponentUsername: opponent.username,
             opponentElo: String(opponent.elo),
             matchId: `match_${Date.now()}`,
@@ -447,7 +437,7 @@ export default function DuelsLobby() {
                 width: 120,
                 alignItems: "center",
                 borderWidth: 2,
-                borderColor: league.name === "Gold" ? "#FFD700" : "#222",
+                borderColor: profileData?.league?.toLowerCase() === league.name.toLowerCase() ? "#FFD700" : "#222",
               }}
             >
               <Text style={{ fontSize: 28, marginBottom: 8 }}>
@@ -456,7 +446,7 @@ export default function DuelsLobby() {
               <Text
                 style={{ color: league.color, fontWeight: "800", fontSize: 14 }}
               >
-                {league.name}
+                {profileData?.league?.toLowerCase() === league.name.toLowerCase() && ("★ ")}{league.name}
               </Text>
               <Text style={{ color: "#666", fontSize: 11, marginTop: 4 }}>
                 {league.minElo}+ ELO
