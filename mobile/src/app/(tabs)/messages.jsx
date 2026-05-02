@@ -1,10 +1,24 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search, Plus, UserPlus } from "lucide-react-native";
 import api from "@/utils/api";
 
 export default function Friends() {
+  const [addModalVisible, setAddModalVisible] = useState(false);
+  const [friendUsername, setFriendUsername] = useState("");
+
+  const handleSendRequest = async () => {
+    if (!friendUsername.trim()) return;
+    try {
+      await api.Friends.sendRequest(friendUsername.trim());
+      Alert.alert("Success", "Friend request sent!");
+      setAddModalVisible(false);
+      setFriendUsername("");
+    } catch (err) {
+      Alert.alert("Error", err.message || "Failed to send request.");
+    }
+  };
   const insets = useSafeAreaInsets();
   const [friends, setFriends] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -114,6 +128,7 @@ export default function Friends() {
         </Text>
         <View style={{ flexDirection: "row" }}>
           <TouchableOpacity
+            onPress={() => setAddModalVisible(true)}
             style={{
               backgroundColor: "#111",
               padding: 10,
@@ -195,6 +210,41 @@ export default function Friends() {
           )}
         </ScrollView>
       )}
+
+      {/* Add Friend Modal */}
+      <Modal visible={addModalVisible} animationType="slide" transparent={true}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", padding: 20 }}>
+          <View style={{ backgroundColor: "#111", padding: 24, borderRadius: 24, borderWidth: 1, borderColor: "#333" }}>
+            <Text style={{ color: "#fff", fontSize: 20, fontWeight: "800", marginBottom: 16 }}>Add Friend</Text>
+            
+            <TextInput
+              style={{ backgroundColor: "#000", color: "#fff", padding: 16, borderRadius: 12, borderWidth: 1, borderColor: "#333", marginBottom: 20 }}
+              placeholder="Enter username"
+              placeholderTextColor="#666"
+              value={friendUsername}
+              onChangeText={setFriendUsername}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <TouchableOpacity
+                onPress={() => setAddModalVisible(false)}
+                style={{ flex: 1, padding: 16, backgroundColor: "#222", borderRadius: 12, marginRight: 8, alignItems: "center" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                onPress={handleSendRequest}
+                style={{ flex: 1, padding: 16, backgroundColor: "#007AFF", borderRadius: 12, marginLeft: 8, alignItems: "center" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>Send Request</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

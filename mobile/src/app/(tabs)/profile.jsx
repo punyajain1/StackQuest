@@ -344,7 +344,7 @@ export default function Profile() {
             </View>
 
             {[
-              {
+              /*{
                 label: "Instagram",
                 value: draftInstagram,
                 setter: setDraftInstagram,
@@ -361,7 +361,7 @@ export default function Profile() {
                 value: draftOrg,
                 setter: setDraftOrg,
                 placeholder: "Company / University",
-              },
+              },*/
               {
                 label: "Bio",
                 value: draftBio,
@@ -628,8 +628,7 @@ export default function Profile() {
               </View>
 
               {/* Social Links */}
-              <View style={{ marginBottom: 18 }}>
-                {/* Organization */}
+              {/* <View style={{ marginBottom: 18 }}>
                 <View
                   style={{
                     flexDirection: "row",
@@ -680,7 +679,7 @@ export default function Profile() {
                     openLink(`https://x.com/${twitterHandle.replace("@", "")}`)
                   }
                 />
-              </View>
+              </View> */}
 
               {/* XP Progress */}
               <View>
