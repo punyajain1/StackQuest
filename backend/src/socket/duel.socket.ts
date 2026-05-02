@@ -177,6 +177,38 @@ interface MatchState {
 }
 const matchStateCache = new Map<string, MatchState>();
 
+// ─── Matchmaking queue (league-based) ─────────────────────────────────────────
+
+interface QueueEntry {
+  userId: string;
+  username: string;
+  elo: number;
+  league: string;
+  avatarUrl: string | null;
+  socketId: string;
+}
+
+// Key = league name (lowercase), Value = array of waiting players
+const matchmakingQueue = new Map<string, QueueEntry[]>();
+
+function removeFromQueue(userId: string): void {
+  for (const [league, entries] of matchmakingQueue) {
+    const idx = entries.findIndex(e => e.userId === userId);
+    if (idx !== -1) {
+      entries.splice(idx, 1);
+      if (entries.length === 0) matchmakingQueue.delete(league);
+      return;
+    }
+  }
+}
+
+function isInQueue(userId: string): boolean {
+  for (const entries of matchmakingQueue.values()) {
+    if (entries.some(e => e.userId === userId)) return true;
+  }
+  return false;
+}
+
 // ─── Handler registration ─────────────────────────────────────────────────────
 
 export function registerDuelHandlers(namespace: Namespace): void {
@@ -281,8 +313,103 @@ export function registerDuelHandlers(namespace: Namespace): void {
       }
     });
 
+    // ── duel:find_match ───────────────────────────────────────────────────────
+    socket.on(DUEL.FIND_MATCH, async ({ league: requestedLeague }: { league?: string }) => {
+      try {
+        if (isInQueue(user.id)) {
+          return socket.emit(DUEL.ERROR, { message: 'Already in matchmaking queue' });
+        }
+
+        // Fetch user's current profile for league & elo
+        const dbUser = await prisma.user.findUnique({
+          where: { id: user.id },
+          select: { username: true, elo: true, league: true, avatarUrl: true },
+        });
+        if (!dbUser) return socket.emit(DUEL.ERROR, { message: 'User not found' });
+
+        const league = (requestedLeague || dbUser.league || 'bronze').toLowerCase();
+
+        const entry: QueueEntry = {
+          userId: user.id,
+          username: dbUser.username,
+          elo: dbUser.elo,
+          league,
+          avatarUrl: dbUser.avatarUrl,
+          socketId: socket.id,
+        };
+
+        // Check if there's already someone waiting in this league
+        const queue = matchmakingQueue.get(league) || [];
+        const opponent = queue.find(e => e.userId !== user.id);
+
+        if (opponent) {
+          // Match found! Remove opponent from queue
+          removeFromQueue(opponent.userId);
+
+          logger.info(
+            { player1: opponent.userId, player2: user.id, league },
+            '🎯 Matchmaking: pair found',
+          );
+
+          // Create the duel via duelService
+          const duelState = await duelService.createDuel(opponent.userId);
+          await duelService.joinDuel(duelState.match_id, user.id);
+
+          // Notify both players
+          const opponentSocket = namespace.sockets.get(opponent.socketId);
+          if (opponentSocket) {
+            opponentSocket.emit(DUEL.MATCH_FOUND, {
+              match_id: duelState.match_id,
+              opponent: {
+                username: dbUser.username,
+                elo: dbUser.elo,
+                league,
+                avatar_url: dbUser.avatarUrl,
+              },
+            });
+          }
+
+          socket.emit(DUEL.MATCH_FOUND, {
+            match_id: duelState.match_id,
+            opponent: {
+              username: opponent.username,
+              elo: opponent.elo,
+              league,
+              avatar_url: opponent.avatarUrl,
+            },
+          });
+        } else {
+          // No opponent yet — add to queue
+          queue.push(entry);
+          matchmakingQueue.set(league, queue);
+
+          socket.emit(DUEL.QUEUE_STATUS, {
+            position: queue.length,
+            league,
+            searching: true,
+          });
+
+          logger.info(
+            { userId: user.id, league, queueSize: queue.length },
+            '⏳ Player added to matchmaking queue',
+          );
+        }
+      } catch (err) {
+        logger.error({ err }, 'duel:find_match error');
+        socket.emit(DUEL.ERROR, { message: 'Matchmaking failed' });
+      }
+    });
+
+    // ── duel:cancel_find ──────────────────────────────────────────────────────
+    socket.on(DUEL.CANCEL_FIND, () => {
+      removeFromQueue(user.id);
+      socket.emit(DUEL.QUEUE_STATUS, { position: 0, league: '', searching: false });
+      logger.info({ userId: user.id }, '❌ Player cancelled matchmaking');
+    });
+
     // ── disconnect ────────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
+      removeFromQueue(user.id);
       logger.info({ userId: user.id, reason }, '🔌 Duel socket disconnected');
     });
   });

@@ -7,8 +7,10 @@
 
 export const DUEL = {
   // Client → Server
-  JOIN:   'duel:join',      // { match_id: string }
-  ANSWER: 'duel:answer',   // { round_number: number, answer: string, time_ms: number }
+  JOIN:       'duel:join',         // { match_id: string }
+  ANSWER:     'duel:answer',       // { round_number: number, answer: string, time_ms: number }
+  FIND_MATCH: 'duel:find_match',   // { league?: string }  — enters matchmaking queue
+  CANCEL_FIND:'duel:cancel_find',  // {} — leaves matchmaking queue
 
   // Server → Client
   STATE:          'duel:state',          // DuelState snapshot
@@ -17,6 +19,8 @@ export const DUEL = {
   OPPONENT_READY: 'duel:opponent_ready', // { username, avatar_url }
   TIMER:          'duel:timer',          // { round_number, seconds_remaining }
   COMPLETE:       'duel:complete',       // DuelResult
+  MATCH_FOUND:    'duel:match_found',    // { match_id, opponent: { username, elo, league, avatar_url } }
+  QUEUE_STATUS:   'duel:queue_status',   // { position, league, searching: boolean }
   ERROR:          'duel:error',          // { message: string }
 } as const;
 

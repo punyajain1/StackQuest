@@ -24,15 +24,6 @@ import { ActivityIndicator } from "react-native";
 
 const { width } = Dimensions.get("window");
 
-const FAKE_OPPONENTS = [
-  { username: "jsNinja_X", elo: 1320, league: "GOLD" },
-  { username: "PyQueen99", elo: 1180, league: "SILVER" },
-  { username: "ReactWizard", elo: 1540, league: "PLATINUM" },
-  { username: "node_master", elo: 1290, league: "GOLD" },
-  { username: "css_sensei", elo: 1100, league: "SILVER" },
-  { username: "AlgoKing__", elo: 1670, league: "MASTER" },
-];
-
 const SEARCHING_DOTS = ["SEARCHING .", "SEARCHING ..", "SEARCHING ..."];
 
 export default function DuelsLobby() {
@@ -60,7 +51,8 @@ export default function DuelsLobby() {
 
   const dotIntervalRef = useRef(null);
   const timerRef = useRef(null);
-  const matchTimerRef = useRef(null);
+  const socketRef = useRef(null);
+  const matchFoundDataRef = useRef(null);
 
   const startRipples = () => {
     const rippleSequence = (anim, delay) => {
@@ -90,19 +82,27 @@ export default function DuelsLobby() {
     ripple3.setValue(0);
   };
 
-  const handleFindOpponent = () => {
+  const handleFindOpponent = async () => {
     if (isSearching) {
+      // Cancel search
       setIsSearching(false);
       setSearchTime(0);
       setFoundOpponent(null);
       stopRipples();
       clearInterval(dotIntervalRef.current);
       clearInterval(timerRef.current);
-      clearTimeout(matchTimerRef.current);
       Animated.spring(btnScale, { toValue: 1, useNativeDriver: true }).start();
+
+      // Tell server to cancel
+      if (socketRef.current) {
+        socketRef.current.emit('duel:cancel_find');
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
       return;
     }
 
+    // Start searching
     setIsSearching(true);
     setSearchTime(0);
     setDotIndex(0);
@@ -119,49 +119,94 @@ export default function DuelsLobby() {
     );
     timerRef.current = setInterval(() => setSearchTime((t) => t + 1), 1000);
 
-    const matchDelay = 2000 + Math.random() * 3000;
-    matchTimerRef.current = setTimeout(() => {
-      const opponent =
-        FAKE_OPPONENTS[Math.floor(Math.random() * FAKE_OPPONENTS.length)];
-      setFoundOpponent(opponent);
-      clearInterval(dotIntervalRef.current);
-      clearInterval(timerRef.current);
-      stopRipples();
+    // Connect to duel WebSocket
+    try {
+      const socket = await api.connectDuelSocket();
+      socketRef.current = socket;
 
-      Animated.spring(foundAnim, {
-        toValue: 1,
-        friction: 5,
-        tension: 100,
-        useNativeDriver: true,
-      }).start();
+      socket.on('connect', () => {
+        // Emit find match with the user's current league
+        const myLeague = profileData?.league || 'bronze';
+        socket.emit('duel:find_match', { league: myLeague });
+      });
 
-      setTimeout(() => {
-        setIsSearching(false);
-        setFoundOpponent(null);
-        foundAnim.setValue(0);
-        Animated.spring(btnScale, {
+      socket.on('duel:match_found', (data) => {
+        // Opponent found!
+        const opponent = data.opponent;
+        matchFoundDataRef.current = data;
+        setFoundOpponent(opponent);
+        clearInterval(dotIntervalRef.current);
+        clearInterval(timerRef.current);
+        stopRipples();
+
+        Animated.spring(foundAnim, {
           toValue: 1,
+          friction: 5,
+          tension: 100,
           useNativeDriver: true,
         }).start();
-        router.push({
-          pathname: "/game/vs-screen",
-          params: {
-            myUsername: profileData?.username || user?.username || "You",
-            myElo: String(profileData?.elo || 1200),
-            opponentUsername: opponent.username,
-            opponentElo: String(opponent.elo),
-            matchId: `match_${Date.now()}`,
-          },
-        });
-      }, 1400);
-    }, matchDelay);
+
+        // Navigate to vs-screen after animation
+        setTimeout(() => {
+          setIsSearching(false);
+          setFoundOpponent(null);
+          foundAnim.setValue(0);
+          Animated.spring(btnScale, {
+            toValue: 1,
+            useNativeDriver: true,
+          }).start();
+
+          // Disconnect the matchmaking socket (game socket will re-connect via vs-screen)
+          if (socketRef.current) {
+            socketRef.current.disconnect();
+            socketRef.current = null;
+          }
+
+          router.push({
+            pathname: "/game/vs-screen",
+            params: {
+              myUsername: profileData?.username || user?.username || "You",
+              myElo: String(profileData?.elo || 1200),
+              opponentUsername: opponent.username,
+              opponentElo: String(opponent.elo),
+              matchId: data.match_id,
+            },
+          });
+        }, 1400);
+      });
+
+      socket.on('duel:error', (data) => {
+        console.error('Matchmaking error:', data.message);
+      });
+
+      socket.on('disconnect', () => {
+        // If we get disconnected while still searching, reset the UI
+        if (!matchFoundDataRef.current) {
+          setIsSearching(false);
+          setSearchTime(0);
+          stopRipples();
+          clearInterval(dotIntervalRef.current);
+          clearInterval(timerRef.current);
+          Animated.spring(btnScale, { toValue: 1, useNativeDriver: true }).start();
+        }
+      });
+    } catch (err) {
+      console.error('Failed to connect duel socket:', err);
+      setIsSearching(false);
+      stopRipples();
+      clearInterval(dotIntervalRef.current);
+      clearInterval(timerRef.current);
+    }
   };
 
   useEffect(() => {
     return () => {
       clearInterval(dotIntervalRef.current);
       clearInterval(timerRef.current);
-      clearTimeout(matchTimerRef.current);
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
     };
   }, []);
 

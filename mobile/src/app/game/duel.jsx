@@ -19,7 +19,7 @@ import {
   Target,
   Award,
 } from "lucide-react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useUser } from "@/utils/auth/useUser";
 import api from "@/utils/api";
 
@@ -29,12 +29,13 @@ export default function DuelScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useUser();
+  const { matchId: paramMatchId, opponentUsername: paramOpponentName, opponentElo: paramOpponentElo } = useLocalSearchParams();
 
   const [playerScore, setPlayerScore] = useState(0);
   const [opponentScore, setOpponentScore] = useState(0);
   const [playerElo, setPlayerElo] = useState(user?.elo || 1000);
-  const [opponentElo, setOpponentElo] = useState(1000);
-  const [opponentName, setOpponentName] = useState("Searching...");
+  const [opponentElo, setOpponentElo] = useState(paramOpponentElo ? parseInt(paramOpponentElo) : 1000);
+  const [opponentName, setOpponentName] = useState(paramOpponentName || "Searching...");
   
   const [timeLeft, setTimeLeft] = useState(0);
   const [currentRound, setCurrentRound] = useState(1);
@@ -68,9 +69,13 @@ export default function DuelScreen() {
     const initDuel = async () => {
       try {
         setIsConnecting(true);
-        // Create match via REST
-        const duelState = await api.Duel.createDuel({});
-        const matchId = duelState.match_id;
+
+        // Use the matchId from matchmaking if available, otherwise create a new duel
+        let matchId = paramMatchId;
+        if (!matchId) {
+          const duelState = await api.Duel.createDuel({});
+          matchId = duelState.match_id;
+        }
 
         // Connect via WebSocket
         currentSocket = await api.connectDuelSocket();
