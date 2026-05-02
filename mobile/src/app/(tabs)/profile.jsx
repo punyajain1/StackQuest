@@ -29,6 +29,8 @@ import {
   Shield,
 } from "lucide-react-native";
 import { useUser } from "@/utils/auth/useUser";
+import api from "@/utils/api";
+import { ActivityIndicator } from "react-native";
 
 const LEAGUE_COLORS = {
   Bronze: "#CD7F32",
@@ -60,7 +62,28 @@ export default function Profile() {
   const cardScale = useRef(new Animated.Value(0.96)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
-  const league = "Gold";
+  
+  const [profileData, setProfileData] = useState(null);
+  const [achievements, setAchievements] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const profileRes = await api.Users.getMyProfile();
+        const achRes = await api.Users.getAchievements();
+        setProfileData(profileRes.data || profileRes);
+        setAchievements(achRes.data || achRes || []);
+      } catch (err) {
+        console.error("Failed to load profile:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfile();
+  }, []);
+
+  const league = profileData?.league ? profileData.league.charAt(0).toUpperCase() + profileData.league.slice(1) : "Gold";
   const leagueColor = LEAGUE_COLORS[league] || "#FFD700";
 
   useEffect(() => {
@@ -211,7 +234,7 @@ export default function Profile() {
     </View>
   );
 
-  const AchievementCard = ({ name, icon: Icon, unlocked, color, desc }) => (
+  const AchievementCard = ({ name, icon, unlocked, color, desc }) => (
     <View
       style={{
         width: 110,
@@ -226,7 +249,7 @@ export default function Profile() {
         padding: 14,
       }}
     >
-      <Icon color={unlocked ? color : "#333"} size={32} />
+      <Text style={{ fontSize: 32, opacity: unlocked ? 1 : 0.4 }}>{icon}</Text>
       <Text
         style={{
           color: unlocked ? "#fff" : "#444",
@@ -285,6 +308,7 @@ export default function Profile() {
 
   return (
     <View style={{ flex: 1, backgroundColor: "#000", paddingTop: insets.top }}>
+      {loading ? <View style={{flex:1, justifyContent:'center', alignItems:'center'}}><ActivityIndicator color="#FFD700" /></View> : <>
       {/* Edit Modal */}
       <Modal visible={editModalVisible} animationType="slide" transparent>
         <View
@@ -546,7 +570,7 @@ export default function Profile() {
                     style={{ color: "#666", fontSize: 13, marginBottom: 10 }}
                     numberOfLines={2}
                   >
-                    {bio}
+                    {profileData?.bio || bio}
                   </Text>
 
                   <View
@@ -576,7 +600,7 @@ export default function Profile() {
                           fontSize: 11,
                         }}
                       >
-                        {league} · 1,248 ELO
+                        {league} · {profileData?.elo || 1000} ELO
                       </Text>
                     </View>
                     <View
@@ -596,7 +620,7 @@ export default function Profile() {
                           fontSize: 11,
                         }}
                       >
-                        RANK #42
+                        RANK #{profileData?.rank || 0}
                       </Text>
                     </View>
                   </View>
@@ -673,7 +697,7 @@ export default function Profile() {
                     Diamond League Progress
                   </Text>
                   <Text style={{ color: "#666", fontSize: 12 }}>
-                    2,450 / 3,000 XP
+                    {profileData?.league_xp_current || 0} / {profileData?.league_xp_next || 100} XP
                   </Text>
                 </View>
                 <View
@@ -686,7 +710,7 @@ export default function Profile() {
                 >
                   <Animated.View
                     style={{
-                      width: "82%",
+                      width: `${Math.min(100, Math.max(0, ((profileData?.league_xp_current || 0) / (profileData?.league_xp_next || 1)) * 100))}%`,
                       height: "100%",
                       backgroundColor: leagueColor,
                       borderRadius: 3,
@@ -705,7 +729,7 @@ export default function Profile() {
                     textAlign: "right",
                   }}
                 >
-                  550 XP to Diamond
+                  {Math.max(0, (profileData?.league_xp_next || 0) - (profileData?.league_xp_current || 0))} XP to Next League
                 </Text>
               </View>
             </View>
@@ -730,14 +754,14 @@ export default function Profile() {
           <View style={{ flexDirection: "row", marginBottom: 10 }}>
             <StatCard
               label="Total Duels"
-              value="142"
+              value={profileData?.total_duels || 0}
               icon={Zap}
               color="#FFD700"
               trend={12}
             />
             <StatCard
               label="Win Rate"
-              value="68%"
+              value={profileData?.win_rate ? Math.round(profileData.win_rate * 100) + "%" : "0%"}
               icon={Target}
               color="#00FF00"
               trend={5}
@@ -746,13 +770,13 @@ export default function Profile() {
           <View style={{ flexDirection: "row" }}>
             <StatCard
               label="Max Streak"
-              value="12🔥"
+              value={(profileData?.max_streak || 0) + "🔥"}
               icon={Flame}
               color="#FF6B00"
             />
             <StatCard
               label="Total XP"
-              value="12.4k"
+              value={profileData?.xp > 1000 ? (profileData.xp / 1000).toFixed(1) + "k" : (profileData?.xp || 0)}
               icon={Award}
               color="#007AFF"
               trend={8}
@@ -774,7 +798,7 @@ export default function Profile() {
             <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>
               Achievements
             </Text>
-            <Text style={{ color: "#555", fontSize: 13 }}>8 / 24</Text>
+            <Text style={{ color: "#555", fontSize: 13 }}>{profileData?.achievements_unlocked || 0} / {profileData?.achievements_total || 0}</Text>
           </View>
           <ScrollView
             horizontal
@@ -782,41 +806,20 @@ export default function Profile() {
             style={{ flexGrow: 0 }}
             contentContainerStyle={{ paddingHorizontal: 20 }}
           >
-            <AchievementCard
-              name="Swift Coder"
-              icon={Zap}
-              unlocked={true}
-              color="#FFD700"
-              desc="Answer in < 5s"
-            />
-            <AchievementCard
-              name="Bug Hunter"
-              icon={Shield}
-              unlocked={true}
-              color="#00FF00"
-              desc="10 correct rows"
-            />
-            <AchievementCard
-              name="On Fire"
-              icon={Flame}
-              unlocked={true}
-              color="#FF6B00"
-              desc="5x streak"
-            />
-            <AchievementCard
-              name="Legend"
-              icon={Trophy}
-              unlocked={false}
-              color="#AF52DE"
-              desc="Reach Legend"
-            />
-            <AchievementCard
-              name="Night Owl"
-              icon={Clock}
-              unlocked={false}
-              color="#007AFF"
-              desc="Win after midnight"
-            />
+            {achievements.length > 0 ? (
+              achievements.map((ach) => (
+                <AchievementCard
+                  key={ach.id}
+                  name={ach.name}
+                  icon={ach.icon}
+                  unlocked={ach.unlocked}
+                  color={ach.color}
+                  desc={ach.description}
+                />
+              ))
+            ) : (
+              <Text style={{ color: "#666", alignSelf: "center", marginTop: 20 }}>No achievements found.</Text>
+            )}
           </ScrollView>
         </View>
 
@@ -841,36 +844,24 @@ export default function Profile() {
               </Text>
             </TouchableOpacity>
           </View>
-          <MatchItem
-            opponent="CodeMaster99"
-            result="win"
-            eloChange={15}
-            time="2h ago"
-            score="850 - 720"
-          />
-          <MatchItem
-            opponent="PyDev_X"
-            result="win"
-            eloChange={18}
-            time="5h ago"
-            score="920 - 810"
-          />
-          <MatchItem
-            opponent="JSNinja"
-            result="loss"
-            eloChange={-12}
-            time="1d ago"
-            score="640 - 870"
-          />
-          <MatchItem
-            opponent="ReactQueen"
-            result="win"
-            eloChange={20}
-            time="2d ago"
-            score="1100 - 950"
-          />
+          {profileData?.recent_matches?.length > 0 ? (
+            profileData.recent_matches.map((match, i) => (
+              <MatchItem
+                key={i}
+                opponent={match.opponent_username}
+                result={match.result}
+                eloChange={match.elo_change}
+                time={new Date(match.played_at).toLocaleDateString()}
+                score={match.result === 'win' ? 'Victory' : match.result === 'loss' ? 'Defeat' : 'Draw'}
+              />
+            ))
+          ) : (
+            <Text style={{ color: "#666", textAlign: "center", marginVertical: 20 }}>No recent matches.</Text>
+          )}
         </View>
       </ScrollView>
+      </>
+      }
     </View>
   );
 }

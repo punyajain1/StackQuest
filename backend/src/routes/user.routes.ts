@@ -15,6 +15,7 @@ const router = Router();
 
 router.get('/me', requireAuth, getMyProfile);
 router.get('/search', requireAuth, searchUsers);
+router.get('/achievements', requireAuth, getAchievements);
 router.get('/:id/profile', requireAuth, getProfile);
 router.get('/:id/achievements', requireAuth, getAchievements);
 

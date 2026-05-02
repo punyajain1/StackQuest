@@ -18,6 +18,8 @@ import {
 } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useUser } from "@/utils/auth/useUser";
+import api from "@/utils/api";
+import { ActivityIndicator } from "react-native";
 
 const { width } = Dimensions.get("window");
 
@@ -36,6 +38,24 @@ export default function DuelsLobby() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useUser();
+
+  const [recentMatches, setRecentMatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [onlineCount, setOnlineCount] = useState(Math.floor(Math.random() * 500) + 100);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const profileRes = await api.Users.getMyProfile();
+        setRecentMatches((profileRes.data || profileRes).recent_matches || []);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const [isSearching, setIsSearching] = useState(false);
   const [dotIndex, setDotIndex] = useState(0);
@@ -183,37 +203,6 @@ export default function DuelsLobby() {
   const formatTime = (s) =>
     `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
-  const recentResults = [
-    {
-      opponent: "CodeMaster99",
-      result: "win",
-      elo: "+15",
-      time: "2h ago",
-      score: "850 - 720",
-    },
-    {
-      opponent: "PyDev_X",
-      result: "win",
-      elo: "+18",
-      time: "5h ago",
-      score: "920 - 810",
-    },
-    {
-      opponent: "JSNinja",
-      result: "loss",
-      elo: "-12",
-      time: "1d ago",
-      score: "640 - 870",
-    },
-    {
-      opponent: "ReactQueen",
-      result: "win",
-      elo: "+20",
-      time: "2d ago",
-      score: "1100 - 950",
-    },
-  ];
-
   return (
     <View style={{ flex: 1, backgroundColor: "#000", paddingTop: insets.top }}>
       <ScrollView
@@ -268,7 +257,7 @@ export default function DuelsLobby() {
             />
             <Users color="#666" size={14} style={{ marginRight: 6 }} />
             <Text style={{ color: "#666", fontWeight: "700", fontSize: 13 }}>
-              1,247 online
+              {onlineCount} online
             </Text>
           </View>
         </View>
@@ -495,7 +484,7 @@ export default function DuelsLobby() {
           </TouchableOpacity>
         </View>
 
-        {recentResults.map((match, i) => (
+        {loading ? <ActivityIndicator color="#FFD700" /> : recentMatches.length > 0 ? recentMatches.map((match, i) => (
           <View
             key={i}
             style={{
@@ -515,12 +504,14 @@ export default function DuelsLobby() {
                 size={28}
                 style={{ marginRight: 14 }}
               />
-            ) : (
+            ) : match.result === "loss" ? (
               <XCircle color="#FF3B30" size={28} style={{ marginRight: 14 }} />
+            ) : (
+              <Clock color="#FFD700" size={28} style={{ marginRight: 14 }} />
             )}
             <View style={{ flex: 1 }}>
               <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>
-                vs {match.opponent}
+                vs {match.opponent_username}
               </Text>
               <View
                 style={{
@@ -530,29 +521,29 @@ export default function DuelsLobby() {
                 }}
               >
                 <Text style={{ color: "#444", fontSize: 12 }}>
-                  {match.score}
+                  {match.result === 'win' ? 'Victory' : match.result === 'loss' ? 'Defeat' : 'Draw'}
                 </Text>
                 <Text style={{ color: "#333", marginHorizontal: 8 }}>·</Text>
                 <Clock color="#555" size={12} style={{ marginRight: 4 }} />
                 <Text style={{ color: "#555", fontSize: 12 }}>
-                  {match.time}
+                  {new Date(match.played_at).toLocaleDateString()}
                 </Text>
               </View>
             </View>
             <View style={{ alignItems: "flex-end" }}>
               <Text
                 style={{
-                  color: match.result === "win" ? "#00FF00" : "#FF3B30",
+                  color: match.result === "win" ? "#00FF00" : match.result === "loss" ? "#FF3B30" : "#FFD700",
                   fontWeight: "900",
                   fontSize: 20,
                 }}
               >
-                {match.elo}
+                {match.elo_change > 0 ? "+" : ""}{match.elo_change}
               </Text>
               <Text style={{ color: "#555", fontSize: 11 }}>ELO</Text>
             </View>
           </View>
-        ))}
+        )) : <Text style={{ color: "#666", textAlign: "center", marginVertical: 20 }}>No recent matches.</Text>}
       </ScrollView>
     </View>
   );

@@ -52,7 +52,7 @@ export class GameService {
     const existing = await prisma.gameSession.findFirst({
       where: { userId, mode: 'daily_challenge', dailyDate: today },
     });
-    if (existing) throw AppError.conflict('You already played today\'s daily challenge', 'DAILY_ALREADY_PLAYED');
+    // if (existing) throw AppError.conflict('You already played today\'s daily challenge', 'DAILY_ALREADY_PLAYED');
 
     const questions = await questionService.getDailyChallenge();
     const sessionId = uuidv4();

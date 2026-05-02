@@ -1,14 +1,39 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { View, Text, ScrollView, TouchableOpacity, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Zap, Trophy, Puzzle, ArrowRight, Star } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useUser } from "@/utils/auth/useUser";
+import api from "@/utils/api";
+import { ActivityIndicator } from "react-native";
 
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useUser();
+
+  
+  const [profileData, setProfileData] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [profileRes, lbRes] = await Promise.all([
+          api.Users.getMyProfile(),
+          api.Scores.getLeaderboard({ limit: 3 })
+        ]);
+        setProfileData(profileRes.data || profileRes);
+        setLeaderboard(lbRes.data || lbRes || []);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const GameCard = ({ title, subtitle, icon: Icon, color, onPress, badge }) => (
     <TouchableOpacity
@@ -151,9 +176,7 @@ export default function Home() {
             >
               Current ELO
             </Text>
-            <Text style={{ color: "#000", fontSize: 32, fontWeight: "900" }}>
-              1,248
-            </Text>
+            <Text style={{ color: "#000", fontSize: 32, fontWeight: "900" }}>{profileData?.elo || 0}</Text>
           </View>
           <View style={{ alignItems: "flex-end" }}>
             <View
@@ -165,7 +188,7 @@ export default function Home() {
               }}
             >
               <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800" }}>
-                RANK #42
+                RANK #{profileData?.rank || 0}
               </Text>
             </View>
             <Text
@@ -176,7 +199,7 @@ export default function Home() {
                 fontWeight: "600",
               }}
             >
-              Gold League
+              {profileData?.league ? profileData.league.charAt(0).toUpperCase() + profileData.league.slice(1) : "League"}
             </Text>
           </View>
         </View>
@@ -206,7 +229,7 @@ export default function Home() {
           subtitle="One complex problem a day"
           icon={Star}
           color="#00FF00"
-          onPress={() => {}}
+          onPress={() => router.push("/game/daily")}
         />
 
         <GameCard
@@ -234,7 +257,7 @@ export default function Home() {
             </TouchableOpacity>
           </View>
 
-          {[1, 2, 3].map((i) => (
+          {loading ? <ActivityIndicator color="#FFD700" /> : leaderboard.map((player, i) => (
             <View
               key={i}
               style={{
@@ -256,7 +279,7 @@ export default function Home() {
                   width: 20,
                 }}
               >
-                {i}
+                {i + 1}
               </Text>
               <View
                 style={{
@@ -265,17 +288,20 @@ export default function Home() {
                   borderRadius: 20,
                   backgroundColor: "#222",
                   marginRight: 12,
+                  overflow: 'hidden'
                 }}
-              />
+              >
+                <Image source={{ uri: `https://api.dicebear.com/7.x/avataaars/svg?seed=${player.username}` }} style={{width: '100%', height: '100%'}} />
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: "#fff", fontWeight: "600" }}>
-                  Player_{i}00
+                  {player.username}
                 </Text>
                 <Text style={{ color: "#666", fontSize: 12 }}>
-                  {2400 - i * 100} ELO
+                  {player.score} Score
                 </Text>
               </View>
-              <Trophy size={16} color={i === 1 ? "#FFD700" : "#666"} />
+              <Trophy size={16} color={i === 0 ? "#FFD700" : "#666"} />
             </View>
           ))}
         </View>

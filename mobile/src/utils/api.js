@@ -1,4 +1,4 @@
-import { authKey } from './auth/store';
+
 import * as SecureStore from 'expo-secure-store';
 import { io } from 'socket.io-client';
 
@@ -8,7 +8,7 @@ export const API_PREFIX = `${BASE_URL}/api`;
 
 const getAuthToken = async () => {
   try {
-    const authString = await SecureStore.getItemAsync(authKey);
+    const authString = await SecureStore.getItemAsync("sq-auth-v1");
     if (authString) {
       const auth = JSON.parse(authString);
       return auth?.token || auth?.jwt || null;

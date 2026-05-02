@@ -1,5 +1,5 @@
 import { useAuth } from "@/utils/auth/useAuth";
-import { AuthModal } from "@/utils/auth/useAuthModal";
+import { useSQAuth } from "@/utils/sqAuth";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -21,18 +21,20 @@ const queryClient = new QueryClient({
 
 export default function RootLayout() {
   const { initiate, isReady } = useAuth();
+  const { init: initSQ, isReady: sqReady } = useSQAuth();
 
   useEffect(() => {
     initiate();
-  }, [initiate]);
+    initSQ();
+  }, []);
 
   useEffect(() => {
-    if (isReady) {
+    if (isReady && sqReady) {
       SplashScreen.hideAsync();
     }
-  }, [isReady]);
+  }, [isReady, sqReady]);
 
-  if (!isReady) {
+  if (!isReady || !sqReady) {
     return null;
   }
 
@@ -44,19 +46,51 @@ export default function RootLayout() {
           screenOptions={{
             headerShown: false,
             contentStyle: { backgroundColor: "#000" },
+            animation: "slide_from_right",
           }}
         >
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          {/* Root */}
+          <Stack.Screen name="index" />
+          <Stack.Screen
+            name="(tabs)"
+            options={{ headerShown: false, animation: "fade" }}
+          />
+
+          {/* Auth */}
+          <Stack.Screen
+            name="auth/index"
+            options={{ animation: "fade", gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="auth/login"
+            options={{ animation: "slide_from_bottom" }}
+          />
+          <Stack.Screen
+            name="auth/signup"
+            options={{ animation: "slide_from_bottom" }}
+          />
+          <Stack.Screen name="auth/guest" options={{ animation: "fade" }} />
+
+          {/* Onboarding */}
+          <Stack.Screen
+            name="onboarding/index"
+            options={{ animation: "fade", gestureEnabled: false }}
+          />
+
+          {/* Game */}
+          <Stack.Screen
+            name="game/vs-screen"
+            options={{ presentation: "fullScreenModal", animation: "fade" }}
+          />
           <Stack.Screen
             name="game/duel"
             options={{ presentation: "fullScreenModal" }}
           />
           <Stack.Screen
-            name="game/vs-screen"
-            options={{ presentation: "fullScreenModal", animation: "none" }}
+            name="game/result"
+            options={{ presentation: "fullScreenModal", animation: "fade" }}
           />
         </Stack>
-        <AuthModal />
       </GestureHandlerRootView>
     </QueryClientProvider>
   );

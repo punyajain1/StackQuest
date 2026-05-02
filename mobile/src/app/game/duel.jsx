@@ -258,145 +258,27 @@ export default function DuelScreen() {
     });
   };
 
-  if (gameOver && finalResult) {
+  useEffect(() => {
+    if (gameOver && finalResult) {
+      router.replace({
+        pathname: "/game/result",
+        params: {
+          won: String(finalResult.won),
+          playerScore: String(playerScore),
+          opponentScore: String(opponentScore),
+          eloChange: String(finalResult.eloChange),
+          newElo: String(finalResult.newElo),
+          streak: String(streak),
+          opponentUsername: opponentName || "Rival",
+        },
+      });
+    }
+  }, [gameOver, finalResult]);
+
+  if (gameOver) {
     return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: "#000",
-          paddingTop: insets.top,
-          justifyContent: "center",
-          alignItems: "center",
-          padding: 20,
-        }}
-      >
-        <Animated.View
-          style={{
-            transform: [
-              {
-                scale: confettiAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0.5, 1],
-                }),
-              },
-            ],
-          }}
-        >
-          <Trophy color={finalResult.won ? "#FFD700" : "#666"} size={100} />
-        </Animated.View>
-
-        <Text
-          style={{
-            color: "#fff",
-            fontSize: 36,
-            fontWeight: "900",
-            marginTop: 32,
-          }}
-        >
-          {finalResult.won ? "VICTORY!" : "DEFEATED"}
-        </Text>
-
-        <View
-          style={{
-            backgroundColor: "#111",
-            borderRadius: 24,
-            padding: 24,
-            marginTop: 32,
-            width: "100%",
-            borderWidth: 1,
-            borderColor: "#222",
-          }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              marginBottom: 20,
-            }}
-          >
-            <View style={{ alignItems: "center" }}>
-              <Text style={{ color: "#666", fontSize: 14 }}>You</Text>
-              <Text style={{ color: "#fff", fontSize: 32, fontWeight: "900" }}>
-                {playerScore}
-              </Text>
-            </View>
-            <Text style={{ color: "#333", fontSize: 24, alignSelf: "center" }}>
-              VS
-            </Text>
-            <View style={{ alignItems: "center" }}>
-              <Text style={{ color: "#666", fontSize: 14 }}>{opponentName}</Text>
-              <Text style={{ color: "#fff", fontSize: 32, fontWeight: "900" }}>
-                {opponentScore}
-              </Text>
-            </View>
-          </View>
-
-          <View
-            style={{ borderTopWidth: 1, borderColor: "#222", paddingTop: 20 }}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                marginBottom: 12,
-              }}
-            >
-              <Text style={{ color: "#666" }}>ELO Rating</Text>
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Text
-                  style={{
-                    color: finalResult.won ? "#00FF00" : "#FF3B30",
-                    fontWeight: "700",
-                    fontSize: 18,
-                    marginRight: 8,
-                  }}
-                >
-                  {finalResult.eloChange > 0 ? "+" : ""}
-                  {finalResult.eloChange}
-                </Text>
-                <Text
-                  style={{ color: "#fff", fontWeight: "700", fontSize: 18 }}
-                >
-                  {finalResult.newElo}
-                </Text>
-              </View>
-            </View>
-
-            <View
-              style={{ flexDirection: "row", justifyContent: "space-between" }}
-            >
-              <Text style={{ color: "#666" }}>Max Streak</Text>
-              <Text
-                style={{ color: "#FFD700", fontWeight: "700", fontSize: 18 }}
-              >
-                {streak} 🔥
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={{
-            backgroundColor: "#FFD700",
-            paddingHorizontal: 40,
-            paddingVertical: 16,
-            borderRadius: 16,
-            marginTop: 32,
-            width: "100%",
-          }}
-        >
-          <Text
-            style={{
-              color: "#000",
-              fontWeight: "900",
-              fontSize: 18,
-              textAlign: "center",
-            }}
-          >
-            Back to Home
-          </Text>
-        </TouchableOpacity>
+      <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color="#FFD700" />
       </View>
     );
   }

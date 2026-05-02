@@ -1,10 +1,49 @@
-import React from "react";
-import { View, Text, ScrollView, TouchableOpacity, Image } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Search, Plus, MoreVertical } from "lucide-react-native";
+import { Search, Plus, UserPlus } from "lucide-react-native";
+import api from "@/utils/api";
 
 export default function Friends() {
   const insets = useSafeAreaInsets();
+  const [friends, setFriends] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchFriends();
+  }, []);
+
+  const fetchFriends = async () => {
+    try {
+      setLoading(true);
+      const res = await api.Friends.getFriends();
+      // Assuming backend wraps response in { success: true, data: [...] }
+      // api.js fetchAPI already returns the full JSON. If it's wrapped, extract it:
+      const friendsList = res.data || res || [];
+      setFriends(friendsList);
+    } catch (err) {
+      console.error("Failed to fetch friends:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isOnline = (lastActive) => {
+    if (!lastActive) return false;
+    const diff = new Date() - new Date(lastActive);
+    return diff < 1000 * 60 * 15; // 15 mins
+  };
+
+  const formatTime = (lastActive) => {
+    if (!lastActive) return "unknown";
+    const diff = new Date() - new Date(lastActive);
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "now";
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+  };
 
   const FriendItem = ({ name, status, online, time }) => (
     <TouchableOpacity
@@ -56,6 +95,9 @@ export default function Friends() {
     </TouchableOpacity>
   );
 
+  const onlineFriends = friends.filter(f => isOnline(f.last_active));
+  const offlineFriends = friends.filter(f => !isOnline(f.last_active));
+
   return (
     <View style={{ flex: 1, backgroundColor: "#000", paddingTop: insets.top }}>
       <View
@@ -79,7 +121,7 @@ export default function Friends() {
               marginRight: 8,
             }}
           >
-            <Search color="#fff" size={20} />
+            <UserPlus color="#fff" size={20} />
           </TouchableOpacity>
           <TouchableOpacity
             style={{ backgroundColor: "#fff", padding: 10, borderRadius: 12 }}
@@ -89,70 +131,70 @@ export default function Friends() {
         </View>
       </View>
 
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100 }}
-      >
-        <Text
-          style={{
-            color: "#666",
-            fontSize: 14,
-            fontWeight: "700",
-            marginBottom: 16,
-            marginTop: 16,
-          }}
+      {loading ? (
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+          <ActivityIndicator color="#FFD700" />
+        </View>
+      ) : friends.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+          <Text style={{ color: "#666" }}>No friends yet. Start adding some!</Text>
+        </View>
+      ) : (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100 }}
         >
-          ONLINE — 4
-        </Text>
-        <FriendItem
-          name="Sarah_Dev"
-          status="Solving React hooks..."
-          online={true}
-          time="now"
-        />
-        <FriendItem
-          name="CodeWiz"
-          status="Active in Duel"
-          online={true}
-          time="5m"
-        />
-        <FriendItem
-          name="PyGuru"
-          status="Thinking..."
-          online={true}
-          time="12m"
-        />
-        <FriendItem
-          name="BackendBoss"
-          status="Writing tests"
-          online={true}
-          time="now"
-        />
+          {onlineFriends.length > 0 && (
+            <>
+              <Text
+                style={{
+                  color: "#666",
+                  fontSize: 14,
+                  fontWeight: "700",
+                  marginBottom: 16,
+                  marginTop: 16,
+                }}
+              >
+                ONLINE — {onlineFriends.length}
+              </Text>
+              {onlineFriends.map((f, i) => (
+                <FriendItem
+                  key={i}
+                  name={f.username}
+                  status={`Elo: ${f.elo}`}
+                  online={true}
+                  time={formatTime(f.last_active)}
+                />
+              ))}
+            </>
+          )}
 
-        <Text
-          style={{
-            color: "#666",
-            fontSize: 14,
-            fontWeight: "700",
-            marginBottom: 16,
-            marginTop: 32,
-          }}
-        >
-          OFFLINE — 12
-        </Text>
-        <FriendItem
-          name="OldSchoolCoder"
-          status="Last seen 2h ago"
-          online={false}
-          time="2h"
-        />
-        <FriendItem
-          name="Rustafarian"
-          status="Last seen yesterday"
-          online={false}
-          time="1d"
-        />
-      </ScrollView>
+          {offlineFriends.length > 0 && (
+            <>
+              <Text
+                style={{
+                  color: "#666",
+                  fontSize: 14,
+                  fontWeight: "700",
+                  marginBottom: 16,
+                  marginTop: 32,
+                }}
+              >
+                OFFLINE — {offlineFriends.length}
+              </Text>
+              {offlineFriends.map((f, i) => (
+                <FriendItem
+                  key={i}
+                  name={f.username}
+                  status={`Elo: ${f.elo}`}
+                  online={false}
+                  time={formatTime(f.last_active)}
+                />
+              ))}
+            </>
+          )}
+        </ScrollView>
+      )}
     </View>
   );
 }

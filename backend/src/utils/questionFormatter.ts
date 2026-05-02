@@ -116,8 +116,8 @@ export function buildMCQ(question: SoQuestion, pool: SoQuestion[]): GameQuestion
 
   const bodyExcerpt = excerptBody(question.body, 350);
   const questionText = bodyExcerpt
-    ? `${question.title}\n\n${bodyExcerpt}`
-    : question.title;
+    ? `Which technology tag best describes this question?\n\nTitle: ${question.title}\n\n${bodyExcerpt}`
+    : `Which technology tag best describes this question?\n\nTitle: ${question.title}`;
 
   return {
     question,
