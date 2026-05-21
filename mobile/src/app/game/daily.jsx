@@ -64,9 +64,14 @@ export default function DailyScreen() {
         currentSocket = await api.connectDailySocket();
         setSocket(currentSocket);
 
-        currentSocket.on("connect", () => {
+        const handleConnect = () => {
           currentSocket.emit("daily:join");
-        });
+        };
+
+        if (currentSocket.connected) {
+          handleConnect();
+        }
+        currentSocket.on("connect", handleConnect);
 
         currentSocket.on("daily:question", (data) => {
           setIsConnecting(false);

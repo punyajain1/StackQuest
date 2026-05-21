@@ -84,9 +84,14 @@ export default function DuelScreen() {
         currentSocket = await api.connectDuelSocket();
         setSocket(currentSocket);
 
-        currentSocket.on("connect", () => {
+        const handleConnect = () => {
           currentSocket.emit("duel:join", { match_id: matchId });
-        });
+        };
+
+        if (currentSocket.connected) {
+          handleConnect();
+        }
+        currentSocket.on("connect", handleConnect);
 
         currentSocket.on("connect_error", (err) => {
           console.error("❌ Game Duel Screen Socket Connection Error:", err.message, err);
@@ -98,16 +103,40 @@ export default function DuelScreen() {
             setMatchStatus(state.status);
           }
           // Determine if I am player1 or player2
+          let slot = myPlayerSlot.current;
           if (state.player1?.user_id === user?.id) {
+            slot = 'player1';
             myPlayerSlot.current = 'player1';
           } else if (state.player2?.user_id === user?.id) {
+            slot = 'player2';
             myPlayerSlot.current = 'player2';
           }
           // Set opponent info from state
-          const opponentData = myPlayerSlot.current === 'player1' ? state.player2 : state.player1;
+          const opponentData = slot === 'player1' ? state.player2 : state.player1;
           if (opponentData) {
             setOpponentName(opponentData.username);
             setOpponentElo(opponentData.elo || 1000);
+          }
+
+          // Recover active question/state if reconnecting or joining active match
+          if (state.status === "active" && state.questions && state.current_round) {
+            const roundIdx = state.current_round - 1;
+            if (roundIdx < state.questions.length) {
+              const currentQData = state.questions[roundIdx];
+              if (currentQData) {
+                setCurrentQuestion(currentQData.question);
+                setQuestionType(currentQData.question_type || "mcq");
+                setOptions(currentQData.options || []);
+                setCurrentRound(state.current_round);
+                setTimeLeft(currentQData.time_limit || 45);
+                questionStartTime.current = Date.now(); // fallback approximate start time
+
+                const hasAnswered = slot === 'player1'
+                  ? currentQData.player1_answered
+                  : currentQData.player2_answered;
+                setAnswered(hasAnswered);
+              }
+            }
           }
         });
 
@@ -319,7 +348,7 @@ export default function DuelScreen() {
         },
       });
     }
-  }, [gameOver, finalResult]);
+  }, [gameOver, finalResult, playerScore, opponentScore, streak, opponentName]);
 
   // Handle Cancellation
   const handleCancelInvite = async () => {
@@ -724,6 +753,33 @@ export default function DuelScreen() {
 
       {/* Answer Section */}
       <View style={{ padding: 20, paddingBottom: insets.bottom + 20 }}>
+        {answered && !showResult && (
+          <View
+            style={{
+              backgroundColor: "rgba(255, 215, 0, 0.1)",
+              borderWidth: 1,
+              borderColor: "rgba(255, 215, 0, 0.3)",
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 16,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <ActivityIndicator size="small" color="#FFD700" style={{ marginRight: 12 }} />
+            <Text
+              style={{
+                color: "#FFD700",
+                fontWeight: "700",
+                fontSize: 16,
+              }}
+            >
+              Answer submitted! Waiting for rival...
+            </Text>
+          </View>
+        )}
+
         {showResult && (
           <View
             style={{
@@ -781,8 +837,8 @@ export default function DuelScreen() {
                   borderColor = "#FF3B30";
                 }
               } else if (isSelected) {
-                bgColor = "#333";
-                borderColor = "#555";
+                bgColor = "rgba(255, 215, 0, 0.12)";
+                borderColor = "#FFD700";
               }
 
               return (

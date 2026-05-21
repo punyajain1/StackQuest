@@ -124,11 +124,16 @@ export default function DuelsLobby() {
       const socket = await api.connectDuelSocket();
       socketRef.current = socket;
 
-      socket.on('connect', () => {
+      const handleConnect = () => {
         // Emit find match with the user's current league
         const myLeague = profileData?.league || 'bronze';
         socket.emit('duel:find_match', { league: myLeague });
-      });
+      };
+
+      if (socket.connected) {
+        handleConnect();
+      }
+      socket.on('connect', handleConnect);
 
       socket.on('duel:match_found', (data) => {
         // Opponent found!
