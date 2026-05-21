@@ -1,9 +1,8 @@
 import { useCallback } from 'react';
-import { useAuth } from './useAuth';
+import { useSQAuth } from '../sqAuth';
 
 export const useUser = () => {
-	const { auth, isReady } = useAuth();
-	const user = auth?.user || null;
+	const { user, isReady } = useSQAuth();
 	const fetchUser = useCallback(async () => {
 		return user;
 	}, [user]);

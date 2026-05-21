@@ -29,11 +29,15 @@ function authMiddleware(socket: Socket, next: (err?: Error) => void): void {
       socket.handshake.auth?.token ??
       socket.handshake.headers?.authorization?.replace('Bearer ', '') ?? '';
 
-    if (!token) return next(new Error('NO_TOKEN'));
+    if (!token) {
+      logger.warn({ socketId: socket.id }, '🔌 Duel socket connection failed: NO_TOKEN');
+      return next(new Error('NO_TOKEN'));
+    }
     const user = authService.verifyToken(token);
     (socket as Socket & { user: UserPayload }).user = user;
     next();
-  } catch {
+  } catch (err) {
+    logger.error({ err, socketId: socket.id }, '🔌 Duel socket connection failed: INVALID_TOKEN');
     next(new Error('INVALID_TOKEN'));
   }
 }
@@ -220,12 +224,45 @@ function isInQueue(userId: string): boolean {
 
 // ─── Handler registration ─────────────────────────────────────────────────────
 
+let duelNamespace: Namespace | null = null;
+export const userSockets = new Map<string, string[]>();
+
+export function isUserOnline(userId: string): boolean {
+  return userSockets.has(userId) && (userSockets.get(userId)?.length ?? 0) > 0;
+}
+
+export function sendInviteNotification(inviteeId: string, inviteData: any): void {
+  logger.info({ inviteeId, hasNamespace: !!duelNamespace }, '📣 sendInviteNotification triggered');
+  if (!duelNamespace) return;
+  const socketIds = userSockets.get(inviteeId);
+  logger.info({ inviteeId, socketIds }, '📣 Target socket IDs found for invitee');
+  if (socketIds) {
+    for (const sId of socketIds) {
+      logger.info({ inviteeId, socketId: sId, inviteData }, '📣 Emitting duel:invite_received to socket');
+      duelNamespace.to(sId).emit('duel:invite_received', inviteData);
+    }
+  }
+}
+
+export function sendInviteDeclinedNotification(matchId: string): void {
+  logger.info({ matchId, hasNamespace: !!duelNamespace }, '📣 sendInviteDeclinedNotification triggered');
+  if (!duelNamespace) return;
+  duelNamespace.to(`duel:${matchId}`).emit('duel:invite_declined', { message: 'Challenge was declined' });
+}
+
 export function registerDuelHandlers(namespace: Namespace): void {
+  duelNamespace = namespace;
   namespace.use(authMiddleware);
 
   namespace.on('connection', (socket: Socket) => {
     const user = (socket as Socket & { user: UserPayload }).user;
     logger.info({ userId: user.id, socketId: socket.id }, '🎮 Duel socket connected');
+
+    // Register active socket connection
+    const existing = userSockets.get(user.id) || [];
+    existing.push(socket.id);
+    userSockets.set(user.id, existing);
+    logger.info({ userId: user.id, socketId: socket.id, activeSockets: existing }, '🎮 Registered socket connection');
 
     // ── duel:join ─────────────────────────────────────────────────────────────
     socket.on(DUEL.JOIN, async ({ match_id }: { match_id: string }) => {
@@ -422,7 +459,17 @@ export function registerDuelHandlers(namespace: Namespace): void {
     // ── disconnect ────────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       removeFromQueue(user.id);
-      logger.info({ userId: user.id, reason }, '🔌 Duel socket disconnected');
+
+      // Unregister active socket connection
+      const existing = userSockets.get(user.id) || [];
+      const idx = existing.indexOf(socket.id);
+      if (idx !== -1) {
+        existing.splice(idx, 1);
+        if (existing.length === 0) userSockets.delete(user.id);
+        else userSockets.set(user.id, existing);
+      }
+
+      logger.info({ userId: user.id, reason, activeSockets: existing }, '🔌 Duel socket disconnected');
     });
   });
 }

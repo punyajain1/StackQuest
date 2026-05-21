@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StatusBar } from "expo-status-bar";
+import GlobalDuelInviteListener from "@/components/GlobalDuelInviteListener";
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient({
@@ -91,6 +92,7 @@ export default function RootLayout() {
             options={{ presentation: "fullScreenModal", animation: "fade" }}
           />
         </Stack>
+        <GlobalDuelInviteListener />
       </GestureHandlerRootView>
     </QueryClientProvider>
   );

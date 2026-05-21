@@ -38,12 +38,18 @@ function generateOptions(question: SoQuestion, allQuestions: SoQuestion[]): stri
 }
 
 export class DuelService {
-  async createDuel(userId: string, tag?: string): Promise<DuelState> {
+  async createDuel(userId: string, tag?: string, opponentId?: string): Promise<DuelState> {
     const rounds = env.DUEL_ROUNDS;
     const questions = await questionService.getQuestionsForDuel(rounds);
 
     const match = await prisma.duelMatch.create({
-      data: { player1Id: userId, rounds, tag: tag ?? null, status: 'waiting' },
+      data: {
+        player1Id: userId,
+        player2Id: opponentId ?? null,
+        rounds,
+        tag: tag ?? null,
+        status: opponentId ? 'invited' : 'waiting',
+      },
       include: { player1: { select: { id: true, username: true, avatarUrl: true, elo: true } } },
     });
 
@@ -80,6 +86,47 @@ export class DuelService {
 
     logger.info({ matchId, userId }, 'Player joined duel');
     return this.getDuelState(matchId);
+  }
+
+  async acceptInvite(matchId: string, userId: string): Promise<DuelState> {
+    const match = await prisma.duelMatch.findUnique({ where: { id: matchId } });
+    if (!match) throw AppError.notFound('Duel not found');
+    if (match.status !== 'invited') throw AppError.badRequest('Duel is not an invitation');
+    if (match.player2Id !== userId) throw AppError.forbidden('You are not invited to this duel');
+
+    await prisma.duelMatch.update({
+      where: { id: matchId },
+      data: { status: 'active' },
+    });
+
+    logger.info({ matchId, userId }, 'Invite accepted');
+    return this.getDuelState(matchId);
+  }
+
+  async rejectInvite(matchId: string, userId: string): Promise<void> {
+    const match = await prisma.duelMatch.findUnique({ where: { id: matchId } });
+    if (!match) throw AppError.notFound('Duel not found');
+    if (match.status !== 'invited') throw AppError.badRequest('Duel is not an invitation');
+    if (match.player1Id !== userId && match.player2Id !== userId) throw AppError.forbidden('You are not authorized to cancel/reject this duel');
+
+    await prisma.duelMatch.update({
+      where: { id: matchId },
+      data: { status: 'cancelled' },
+    });
+
+    logger.info({ matchId, userId }, 'Invite rejected');
+  }
+
+  async getPendingInvites(userId: string): Promise<DuelState[]> {
+    const matches = await prisma.duelMatch.findMany({
+      where: {
+        player2Id: userId,
+        status: 'invited',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return Promise.all(matches.map((m) => this.getDuelState(m.id)));
   }
 
   async submitAnswer(matchId: string, userId: string, roundNumber: number, answer: string, timeMs: number): Promise<{
@@ -188,6 +235,7 @@ export class DuelService {
       current_round: answeredRounds + 1,
       total_rounds: match.rounds,
       questions,
+      tag: match.tag,
     };
   }
 

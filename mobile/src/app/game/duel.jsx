@@ -29,13 +29,15 @@ export default function DuelScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useUser();
-  const { matchId: paramMatchId, opponentUsername: paramOpponentName, opponentElo: paramOpponentElo } = useLocalSearchParams();
+  const { matchId: paramMatchId, opponentUsername: paramOpponentName, opponentElo: paramOpponentElo, matchStatus: paramMatchStatus } = useLocalSearchParams();
 
   const [playerScore, setPlayerScore] = useState(0);
   const [opponentScore, setOpponentScore] = useState(0);
   const [playerElo, setPlayerElo] = useState(user?.elo || 1000);
   const [opponentElo, setOpponentElo] = useState(paramOpponentElo ? parseInt(paramOpponentElo) : 1000);
   const [opponentName, setOpponentName] = useState(paramOpponentName || "Searching...");
+  const [matchStatus, setMatchStatus] = useState(paramMatchStatus || "searching");
+  const [declined, setDeclined] = useState(false);
   
   const [timeLeft, setTimeLeft] = useState(0);
   const [currentRound, setCurrentRound] = useState(1);
@@ -86,8 +88,15 @@ export default function DuelScreen() {
           currentSocket.emit("duel:join", { match_id: matchId });
         });
 
+        currentSocket.on("connect_error", (err) => {
+          console.error("❌ Game Duel Screen Socket Connection Error:", err.message, err);
+        });
+
         currentSocket.on("duel:state", (state) => {
           setIsConnecting(false);
+          if (state.status) {
+            setMatchStatus(state.status);
+          }
           // Determine if I am player1 or player2
           if (state.player1?.user_id === user?.id) {
             myPlayerSlot.current = 'player1';
@@ -107,7 +116,14 @@ export default function DuelScreen() {
           if (data.elo) setOpponentElo(data.elo);
         });
 
+        currentSocket.on("duel:invite_declined", (data) => {
+          setDeclined(true);
+          setIsConnecting(false);
+          setMatchStatus("cancelled");
+        });
+
         currentSocket.on("duel:question", (data) => {
+          setMatchStatus("active");
           setCurrentQuestion(data);
           setQuestionType(data.question_type || "mcq");
           setOptions(data.options || []);
@@ -305,6 +321,19 @@ export default function DuelScreen() {
     }
   }, [gameOver, finalResult]);
 
+  // Handle Cancellation
+  const handleCancelInvite = async () => {
+    try {
+      if (paramMatchId) {
+        await api.Duel.rejectInvite(paramMatchId);
+      }
+    } catch (err) {
+      console.error("Error cancelling invite:", err);
+    } finally {
+      router.back();
+    }
+  };
+
   if (gameOver) {
     return (
       <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
@@ -313,7 +342,7 @@ export default function DuelScreen() {
     );
   }
 
-  if (isConnecting || !currentQuestion) {
+  if (declined) {
     return (
       <View
         style={{
@@ -321,12 +350,105 @@ export default function DuelScreen() {
           backgroundColor: "#000",
           justifyContent: "center",
           alignItems: "center",
+          padding: 24,
         }}
       >
-        <ActivityIndicator size="large" color="#FFD700" />
-        <Text style={{ color: "#666", marginTop: 16 }}>
-          {isConnecting ? "Finding opponent..." : "Waiting for match to start..."}
-        </Text>
+        <View style={{
+          backgroundColor: "rgba(255,59,48,0.1)",
+          borderColor: "rgba(255,59,48,0.3)",
+          borderWidth: 1,
+          borderRadius: 24,
+          padding: 32,
+          alignItems: "center",
+          width: "100%",
+        }}>
+          <X color="#FF3B30" size={64} style={{ marginBottom: 16 }} />
+          <Text style={{ color: "#fff", fontSize: 24, fontWeight: "900", marginBottom: 8, textAlign: "center" }}>
+            Challenge Declined
+          </Text>
+          <Text style={{ color: "#888", fontSize: 16, textAlign: "center", marginBottom: 24 }}>
+            Your friend declined the duel challenge.
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={{
+              backgroundColor: "#222",
+              paddingVertical: 14,
+              paddingHorizontal: 32,
+              borderRadius: 16,
+              width: "100%",
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Return to Friends</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (isConnecting || !currentQuestion || matchStatus === "invited") {
+    const isInviteFlow = matchStatus === "invited";
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#000",
+          justifyContent: "center",
+          alignItems: "center",
+          padding: 24,
+        }}
+      >
+        {isInviteFlow ? (
+          <View style={{ alignItems: "center", width: "100%" }}>
+            <View style={{
+              width: 120,
+              height: 120,
+              borderRadius: 60,
+              backgroundColor: "rgba(255, 215, 0, 0.1)",
+              borderWidth: 2,
+              borderColor: "rgba(255, 215, 0, 0.4)",
+              justifyContent: "center",
+              alignItems: "center",
+              marginBottom: 32,
+              shadowColor: "#FFD700",
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: 0.3,
+              shadowRadius: 10,
+              elevation: 5,
+            }}>
+              <Flame color="#FFD700" size={54} />
+            </View>
+            <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900", marginBottom: 8, textAlign: "center" }}>
+              Challenging {opponentName}...
+            </Text>
+            <Text style={{ color: "#888", fontSize: 15, textAlign: "center", marginBottom: 40, paddingHorizontal: 20 }}>
+              Waiting for opponent to accept the duel invitation.
+            </Text>
+
+            <TouchableOpacity
+              onPress={handleCancelInvite}
+              style={{
+                backgroundColor: "rgba(255,59,48,0.15)",
+                borderColor: "rgba(255,59,48,0.4)",
+                borderWidth: 1,
+                paddingVertical: 16,
+                borderRadius: 16,
+                width: "100%",
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#FF3B30", fontWeight: "900", fontSize: 16 }}>Cancel Challenge</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={{ alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#FFD700" />
+            <Text style={{ color: "#666", marginTop: 16, fontSize: 16, fontWeight: "600" }}>
+              {isConnecting ? "Finding opponent..." : "Waiting for match to start..."}
+            </Text>
+          </View>
+        )}
       </View>
     );
   }

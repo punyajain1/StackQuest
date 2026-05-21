@@ -109,12 +109,13 @@ export type ScoreRange = '0-10' | '10-100' | '100-500' | '500+';
 
 export interface DuelState {
   match_id: string;
-  status: 'waiting' | 'active' | 'completed' | 'cancelled';
+  status: 'waiting' | 'invited' | 'active' | 'completed' | 'cancelled';
   player1: DuelPlayerInfo;
   player2: DuelPlayerInfo | null;
   current_round: number;
   total_rounds: number;
   questions: DuelQuestionPayload[];
+  tag: string | null;
 }
 
 export interface DuelPlayerInfo {

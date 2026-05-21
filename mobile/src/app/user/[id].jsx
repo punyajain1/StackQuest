@@ -28,6 +28,7 @@ import {
   X,
   Shield,
   LogOut,
+  ArrowLeft,
 } from "lucide-react-native";
 import { useUser } from "@/utils/auth/useUser";
 import { useSQAuth } from "@/utils/sqAuth";
@@ -321,12 +322,26 @@ export default function PublicProfile() {
       <View
         style={{
           flexDirection: "row",
-          justifyContent: "space-between",
           alignItems: "center",
           paddingHorizontal: 20,
           paddingVertical: 12,
         }}
       >
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={{
+            marginRight: 16,
+            padding: 8,
+            backgroundColor: "#111",
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: "#222",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <ArrowLeft color="#fff" size={18} />
+        </TouchableOpacity>
         <Text
           style={{
             color: "#FFD700",
@@ -337,7 +352,7 @@ export default function PublicProfile() {
         >
           PROFILE
         </Text>
-        </View>
+      </View>
 
       <ScrollView
         style={{ flex: 1 }}

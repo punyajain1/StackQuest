@@ -8,12 +8,7 @@ import app from '../app';
 const corsOrigins =
   env.NODE_ENV === 'production'
     ? ['https://yourdomain.com']
-    : [
-        'http://localhost:5173',
-        'http://localhost:3001',
-        'http://localhost:8081',
-        'http://localhost:19006',
-      ];
+    : (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => callback(null, true);
 
 // ─── HTTP Server ──────────────────────────────────────────────────────────────
 

@@ -2,10 +2,18 @@ import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import type { FriendInfo } from '../models/db.types';
+import { isUserOnline } from '../socket/duel.socket';
 
 export class FriendService {
   async sendRequest(senderId: string, receiverUsername: string): Promise<{ id: string }> {
-    const receiver = await prisma.user.findUnique({ where: { username: receiverUsername } });
+    const receiver = await prisma.user.findFirst({
+      where: {
+        username: {
+          equals: receiverUsername,
+          mode: 'insensitive',
+        },
+      },
+    });
     if (!receiver) throw AppError.notFound('User not found');
     if (receiver.id === senderId) throw AppError.badRequest('Cannot send friend request to yourself');
 
@@ -98,18 +106,21 @@ export class FriendService {
       },
     });
 
-    return friendships.map((f) => {
-      const friend = f.senderId === userId ? f.receiver : f.sender;
-      return {
-        friendship_id: f.id,
-        user_id: friend.id,
-        username: friend.username,
-        avatar_url: friend.avatarUrl,
-        elo: friend.elo,
-        league: friend.league,
-        last_active: friend.lastActive.toISOString(),
-      };
-    });
+    return friendships
+      .filter((f) => f.sender && f.receiver)
+      .map((f) => {
+        const friend = f.senderId === userId ? f.receiver! : f.sender!;
+        const online = isUserOnline(friend.id);
+        return {
+          friendship_id: f.id,
+          user_id: friend.id,
+          username: friend.username,
+          avatar_url: friend.avatarUrl,
+          elo: friend.elo,
+          league: friend.league,
+          last_active: online ? new Date().toISOString() : friend.lastActive.toISOString(),
+        };
+      });
   }
 
   async getPendingRequests(userId: string): Promise<FriendInfo[]> {
@@ -120,15 +131,20 @@ export class FriendService {
       },
     });
 
-    return friendships.map((f) => ({
-      friendship_id: f.id,
-      user_id: f.sender.id,
-      username: f.sender.username,
-      avatar_url: f.sender.avatarUrl,
-      elo: f.sender.elo,
-      league: f.sender.league,
-      last_active: f.sender.lastActive.toISOString(),
-    }));
+    return friendships
+      .filter((f) => f.sender)
+      .map((f) => {
+        const online = isUserOnline(f.sender!.id);
+        return {
+          friendship_id: f.id,
+          user_id: f.sender!.id,
+          username: f.sender!.username,
+          avatar_url: f.sender!.avatarUrl,
+          elo: f.sender!.elo,
+          league: f.sender!.league,
+          last_active: online ? new Date().toISOString() : f.sender!.lastActive.toISOString(),
+        };
+      });
   }
 }
 

@@ -33,7 +33,7 @@ app.use(cors({
 }));
 
 // ─── Body Parsing ────────────────────────────────────────────
-app.use(express.json({ limit: '10kb' }));
+app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Global Rate Limiting ────────────────────────────────────

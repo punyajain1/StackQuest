@@ -81,6 +81,9 @@ export const DuelAPI = {
   joinDuel: (id) => fetchAPI(`/duel/${id}/join`, { method: 'POST' }),
   getDuelState: (id) => fetchAPI(`/duel/${id}/state`, { method: 'GET' }),
   getDuelResult: (id) => fetchAPI(`/duel/${id}/result`, { method: 'GET' }),
+  acceptInvite: (id) => fetchAPI(`/duel/${id}/accept-invite`, { method: 'POST' }),
+  rejectInvite: (id) => fetchAPI(`/duel/${id}/reject-invite`, { method: 'POST' }),
+  getPendingInvites: () => fetchAPI('/duel/invitations', { method: 'GET' }),
 };
 
 // --- 4. Friend System Endpoints ---
@@ -125,6 +128,7 @@ export const createWebSocketConnection = async (namespace) => {
   const token = await getAuthToken();
   const socket = io(`${BASE_URL}${namespace}`, {
     auth: { token },
+    transports: ['websocket'], // Force WebSocket transport in React Native for highly-reliable connections
   });
   return socket;
 };

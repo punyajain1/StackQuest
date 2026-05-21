@@ -522,6 +522,66 @@ async function runTests() {
     assert(typeof data.data.elo === 'number', 'Missing elo in profile');
   });
 
+  // ── 11.5. Duel Invitation Flow ────────────────────────────
+
+  group('Duel — Friend Invitation Flow');
+
+  let inviteDuelId = '';
+  let rejectDuelId = '';
+  let cancelDuelId = '';
+
+  await test('Player 1 challenges Player 2 with opponentId', async () => {
+    const { status, data } = await api('POST', '/api/duel/create', { opponentId: p2Id }, p1Token);
+    assertStatus(status, 201, JSON.stringify(data));
+    assert(data.data.status === 'invited', `Expected invited, got ${data.data.status}`);
+    assert(data.data.player2.user_id === p2Id, 'Player 2 ID mismatch');
+    inviteDuelId = data.data.match_id;
+  });
+
+  await test('Player 2 lists pending invitations', async () => {
+    const { status, data } = await api('GET', '/api/duel/invitations', undefined, p2Token);
+    assertStatus(status, 200, JSON.stringify(data));
+    assert(Array.isArray(data.data), 'Expected array of invitations');
+    const hasInvite = data.data.some((m: any) => m.match_id === inviteDuelId);
+    assert(hasInvite, 'Could not find pending invitation');
+  });
+
+  await test('Player 2 accepts the invitation', async () => {
+    const { status, data } = await api('POST', `/api/duel/${inviteDuelId}/accept-invite`, {}, p2Token);
+    assertStatus(status, 200, JSON.stringify(data));
+    assert(data.data.status === 'active', `Expected active status, got ${data.data.status}`);
+  });
+
+  await test('Player 1 challenges Player 2 again to test rejection', async () => {
+    const { status, data } = await api('POST', '/api/duel/create', { opponentId: p2Id }, p1Token);
+    assertStatus(status, 201, JSON.stringify(data));
+    rejectDuelId = data.data.match_id;
+  });
+
+  await test('Player 2 declines the invitation', async () => {
+    const { status, data } = await api('POST', `/api/duel/${rejectDuelId}/reject-invite`, {}, p2Token);
+    assertStatus(status, 200, JSON.stringify(data));
+    
+    // Check status is cancelled
+    const { data: state } = await api('GET', `/api/duel/${rejectDuelId}/state`, undefined, p1Token);
+    assert(state.data.status === 'cancelled', `Expected cancelled, got ${state.data.status}`);
+  });
+
+  await test('Player 1 challenges Player 2 again to test challenger cancellation', async () => {
+    const { status, data } = await api('POST', '/api/duel/create', { opponentId: p2Id }, p1Token);
+    assertStatus(status, 201, JSON.stringify(data));
+    cancelDuelId = data.data.match_id;
+  });
+
+  await test('Player 1 cancels their own invitation', async () => {
+    const { status, data } = await api('POST', `/api/duel/${cancelDuelId}/reject-invite`, {}, p1Token);
+    assertStatus(status, 200, JSON.stringify(data));
+
+    // Check status is cancelled
+    const { data: state } = await api('GET', `/api/duel/${cancelDuelId}/state`, undefined, p1Token);
+    assert(state.data.status === 'cancelled', `Expected cancelled, got ${state.data.status}`);
+  });
+
   // ── 12. Error Cases ────────────────────────────────────────
 
   group('Error Handling');
