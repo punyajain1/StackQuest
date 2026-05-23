@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --color-background: oklch(0.09 0.01 260);
+  --color-foreground: oklch(0.98 0.005 260);
+  --color-surface: oklch(0.13 0.015 260);
+  --color-border: oklch(0.20 0.015 260);
+  --color-hairline: oklch(0.16 0.015 260 / 0.5);
+  --color-accent: oklch(0.76 0.17 140);
+  --color-success: oklch(0.76 0.17 140);
+  --color-warning: oklch(0.85 0.17 75);
+  --color-danger: oklch(0.68 0.22 25);
+  --color-info: oklch(0.72 0.15 240);
+  --color-muted-foreground: oklch(0.62 0.01 260);
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom UI Patterns */
+
+/* CRT retro scanlines */
+.scanlines {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%,
+    rgba(0, 0, 0, 0.15) 50%
+  );
+  background-size: 100% 4px;
+  z-index: 10;
+}
+
+/* Cyber dot grid background */
+.dot-grid {
+  background-image: radial-gradient(
+    var(--color-border) 1px,
+    transparent 1px
+  );
+  background-size: 16px 16px;
+}
+
+/* Tactile 3D retro elements */
+.tactile {
+  box-shadow: 3px 3px 0px 0px oklch(0.05 0.01 260);
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tactile:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px 0px oklch(0.05 0.01 260);
+}
+
+.tactile:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px 0px oklch(0.05 0.01 260);
+}
+
+/* Cyber neon ring glow */
+.neon-ring {
+  box-shadow: 0 0 15px 1px oklch(0.76 0.17 140 / 0.25);
+  border-color: var(--color-accent);
+}
+
+/* CRT flickering screen */
+@keyframes crt-flicker {
+  0% { opacity: 0.985; }
+  50% { opacity: 0.995; }
+  100% { opacity: 0.985; }
+}
+
+.crt-effect {
+  animation: crt-flicker 0.15s infinite;
+}
