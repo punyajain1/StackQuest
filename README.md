@@ -1,8 +1,20 @@
 # ⚔️ StackQuest — Real-time Developer Trivia Arena
 
+> [!WARNING]
+> ### ⚠️ Development Status
+> **Due to limitations and also due to solo devlopment, I was not able to scale this project and deply it. I have researched about how to make it properly work, but due to exams and the pressure at the time of building , it made me overwhelmed and I had to leave it like this only. its pretty good and have shown it to people wanted to see this project in motion they loved it like this too, but yess with proper guidance and resources i could grow it way more better than this!!**
+
 Welcome to **StackQuest**, a highly visual, gamified, real-time developer trivia arena where software engineering knowledge meets high-stakes competitive play! 
 
 StackQuest transforms Stack Overflow questions, code snippets, and tech tags into interactive game modes. Challenge your friends in **1v1 Real-time Duels**, climb the matchmaking leagues, conquer the **Daily Coding Challenge**, or hone your skills in infinite **Puzzle Mode**. 
+
+## 🎥 Gameplay Demos
+
+### Mobile Interface (Old UI)
+![Mobile UI Gameplay](./public/duel_in_mobile_ui.mov)
+
+### Web Interface (Prototype New UI)
+![Web UI Gameplay](./public/only%20web%20new%20ui.mov)
 
 ---
 
