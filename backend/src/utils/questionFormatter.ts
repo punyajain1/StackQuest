@@ -22,6 +22,9 @@
  */
 
 import type { SoQuestion, GameQuestion, QuestionType } from '../models/db.types';
+import nlp from 'compromise';
+import { NodeHtmlMarkdown } from 'node-html-markdown';
+import { TfIdf } from 'natural';
 
 // ─── HTML → clean text ────────────────────────────────────────────────────────
 
@@ -77,17 +80,68 @@ const TIME_LIMITS: Record<QuestionType, number> = {
   string_answer: 90, // free-form — needs time to type
 };
 
-// ─── MCQ builder ─────────────────────────────────────────────────────────────
+// ─── MCQ types & validation ──────────────────────────────────────────────────
+
+export interface MCQVariant {
+  question_type: 'mcq' | 'cloze' | 'answer_mcq' | 'true_false';
+  question_text: string;
+  options: string[];
+  correct_answer: string;
+  time_limit: number;
+}
+
+function isGoodDistractor(correct: string, distractor: string): boolean {
+  if (!distractor || distractor.trim() === '') return false;
+  const c = correct.toLowerCase().trim();
+  const d = distractor.toLowerCase().trim();
+  if (c === d) return false;
+  if (Math.abs(c.length - d.length) < 2 && (c.includes(d) || d.includes(c))) return false;
+  return true;
+}
+
+/**
+ * Given a question and a pool, returns 3–6 questions that are
+ * topically related but not identical — ideal distractor sources.
+ *
+ * Strategy: skip the top 2 most similar (too close = giveaway),
+ * take the next 6 (same topic, different answer = plausible wrong options).
+ */
+export function findDistractorQuestions(
+  question: any,
+  pool: any[]
+): any[] {
+  if (!pool || pool.length === 0) return [];
+  const tfidf = new TfIdf();
+
+  pool.forEach(q =>
+    tfidf.addDocument(`${q.title} ${q.tags.join(' ')}`)
+  );
+
+  const scores: { q: any; score: number }[] = [];
+  const qId = question.questionId ?? question.question_id;
+
+  tfidf.tfidfs(`${question.title} ${question.tags.join(' ')}`, (i, score) => {
+    const pId = pool[i].questionId ?? pool[i].question_id;
+    if (pId !== qId) {
+      scores.push({ q: pool[i], score });
+    }
+  });
+
+  return scores
+    .sort((a, b) => b.score - a.score)
+    .slice(2, 8) // skip top 2 (too similar), use next 6
+    .map(s => s.q);
+}
+
+// ─── MCQ builders ─────────────────────────────────────────────────────────────
 
 /**
  * Builds an MCQ question from a SO question.
- *
- * Question text: "Which technology tag best describes this question?"
- * Body context:  First 400 chars of stripped question body
- * Correct answer: tags[0] (primary tag)
- * Distractors: tags from other unrelated questions in the pool
  */
-export function buildMCQ(question: SoQuestion, pool: SoQuestion[]): GameQuestion {
+export function buildTagMCQ(
+  question: SoQuestion,
+  pool: SoQuestion[]
+): MCQVariant {
   const correct = question.tags[0] ?? 'unknown';
 
   // Gather unique distractor tags from the pool, not overlapping with this question's tags
@@ -97,7 +151,7 @@ export function buildMCQ(question: SoQuestion, pool: SoQuestion[]): GameQuestion
 
   for (const q of pool) {
     for (const tag of q.tags) {
-      if (!seen.has(tag) && distractors.length < 3) {
+      if (!seen.has(tag) && isGoodDistractor(correct, tag)) {
         distractors.push(tag);
         seen.add(tag);
       }
@@ -108,25 +162,152 @@ export function buildMCQ(question: SoQuestion, pool: SoQuestion[]): GameQuestion
   // Pad if not enough distractors
   const fallbacks = ['python', 'javascript', 'c++', 'java', 'rust', 'go', 'php', 'ruby'];
   for (const f of fallbacks) {
-    if (!seen.has(f)) { distractors.push(f); seen.add(f); }
+    if (!seen.has(f) && isGoodDistractor(correct, f)) { distractors.push(f); seen.add(f); }
     if (distractors.length >= 3) break;
   }
 
   const options = shuffle([correct, ...distractors.slice(0, 3)]);
 
+  const decodedTitle = decodeEntities(question.title);
   const bodyExcerpt = excerptBody(question.body, 350);
   const questionText = bodyExcerpt
-    ? `Which technology tag best describes this question?\n\nTitle: ${question.title}\n\n${bodyExcerpt}`
-    : `Which technology tag best describes this question?\n\nTitle: ${question.title}`;
+    ? `Which technology tag best describes this question?\n\nTitle: ${decodedTitle}\n\n${bodyExcerpt}`
+    : `Which technology tag best describes this question?\n\nTitle: ${decodedTitle}`;
 
+  return {
+    question_type: 'mcq',
+    question_text: questionText,
+    options,
+    correct_answer: correct,
+    time_limit: 20,
+  };
+}
+
+export function buildMCQ(question: SoQuestion, pool: SoQuestion[]): GameQuestion {
+  const variant = buildTagMCQ(question, pool);
   return {
     question,
     question_type: 'mcq',
-    options,
-    time_limit: TIME_LIMITS.mcq,
-    question_text: questionText,
-    correct_answer: correct,
+    options: variant.options,
+    time_limit: variant.time_limit,
+    question_text: variant.question_text,
+    correct_answer: variant.correct_answer,
     hint: `Tags on this question: ${question.tags.slice(0, 2).join(', ')}`,
+  };
+}
+
+// ─── Cloze Builder ────────────────────────────────────────────────────────────
+
+export function buildCloze(
+  question: SoQuestion,
+  pool: SoQuestion[]
+): MCQVariant | null {
+  const doc = nlp(question.title);
+  const nouns = doc.nouns().out('array') as string[];
+
+  if (nouns.length === 0) return null; // fallback
+
+  const keyword = nouns[0];
+  const stem = question.title.replace(keyword, '_____');
+
+  const distractors = pool
+    .map(q => {
+      const d = nlp(q.title);
+      const ns = d.nouns().out('array') as string[];
+      return ns[0] ?? null;
+    })
+    .filter((n): n is string => n !== null && isGoodDistractor(keyword, n));
+
+  const uniqueDistractors = Array.from(new Set(distractors));
+
+  // Pad if not enough distractors
+  const fallbacks = ['function', 'class', 'object', 'variable', 'array', 'string', 'promise', 'loop'];
+  for (const f of fallbacks) {
+    if (uniqueDistractors.length < 3 && isGoodDistractor(keyword, f) && !uniqueDistractors.includes(f)) {
+      uniqueDistractors.push(f);
+    }
+  }
+
+  if (uniqueDistractors.length < 3) return null;
+
+  const options = shuffle([keyword, ...uniqueDistractors.slice(0, 3)]);
+
+  return {
+    question_type: 'cloze',
+    question_text: `Fill in the blank:\n\n"${stem}"`,
+    options,
+    correct_answer: keyword,
+    time_limit: 20,
+  };
+}
+
+// ─── Answer Comprehension MCQ ──────────────────────────────────────────────────
+
+export function buildAnswerMCQ(
+  question: SoQuestion,
+  pool: SoQuestion[]
+): MCQVariant | null {
+  const body = question.top_answer_body ?? (question as any).topAnswerBody;
+  if (!body) return null;
+
+  const markdown = NodeHtmlMarkdown.translate(body);
+  const plainText = markdown.replace(/```[\s\S]*?```/g, '[code block]');
+  const firstSentence = plainText.split(/[.!?]/)[0]?.trim();
+
+  if (!firstSentence || firstSentence.length < 30) return null;
+
+  const correct = question.tags[0];
+  const distractors = pool
+    .map(q => q.tags[0])
+    .filter(t => t && isGoodDistractor(correct, t));
+
+  const uniqueDistractors = Array.from(new Set(distractors));
+
+  // Pad if not enough distractors
+  const fallbacks = ['python', 'javascript', 'c++', 'java', 'rust', 'go', 'php', 'ruby'];
+  for (const f of fallbacks) {
+    if (uniqueDistractors.length < 3 && isGoodDistractor(correct, f) && !uniqueDistractors.includes(f)) {
+      uniqueDistractors.push(f);
+    }
+  }
+
+  if (uniqueDistractors.length < 3) return null;
+
+  const options = shuffle([correct, ...uniqueDistractors.slice(0, 3)]);
+
+  return {
+    question_type: 'answer_mcq',
+    question_text: `Which technology does this answer describe?\n\n"${firstSentence}..."`,
+    options,
+    correct_answer: correct,
+    time_limit: 25,
+  };
+}
+
+// ─── True / False Builder ─────────────────────────────────────────────────────
+
+export function buildTrueFalse(
+  question: SoQuestion,
+  pool: SoQuestion[]
+): MCQVariant | null {
+  const correctTag = question.tags[0];
+  if (!correctTag) return null;
+
+  const distractor = pool.find(q => !q.tags.includes(correctTag))?.tags[0];
+  if (!distractor) return null;
+
+  const isTrue = Math.random() > 0.5;
+  const displayTag = isTrue ? correctTag : distractor;
+  const stem = question.title.toLowerCase().includes(correctTag.toLowerCase())
+    ? question.title.replace(new RegExp(escapeRegex(correctTag), 'gi'), displayTag)
+    : `Is "${displayTag}" the primary technology in: "${question.title}"?`;
+
+  return {
+    question_type: 'true_false',
+    question_text: stem,
+    options: ['True', 'False'],
+    correct_answer: isTrue ? 'True' : 'False',
+    time_limit: 10,
   };
 }
 
@@ -134,21 +315,9 @@ export function buildMCQ(question: SoQuestion, pool: SoQuestion[]): GameQuestion
 
 /**
  * Builds a fill-in-blank question from a SO question title.
- *
- * Strategy:
- *  1. Check if tags[0] appears as a word in the title → replace with "___"
- *  2. Otherwise find the most significant noun (longest word > 4 chars that
- *     is a technology/language keyword) → replace with "___"
- *  3. Fallback: replace last word in title
- *
- * Example:
- *  title: "How do I remove a specific value from an array in JavaScript?"
- *  tag:   "javascript"
- *  output: "How do I remove a specific value from an array in ___?"
- *  answer: "JavaScript"
  */
 export function buildFillInBlank(question: SoQuestion): GameQuestion {
-  const title = question.title;
+  const title = decodeEntities(question.title);
 
   let correctAnswer = '';
   let blankText = '';
@@ -211,19 +380,15 @@ export function buildFillInBlank(question: SoQuestion): GameQuestion {
 
 /**
  * Builds a string-answer question from a SO question + top answer.
- *
- * Question text: title + body excerpt (first 500 chars, stripped HTML)
- * Hint: "Top answer by {author} has {score} upvotes"
- * correct_reference: stripped top_answer_body for keyword-overlap evaluation
  */
 export function buildStringAnswer(question: SoQuestion): GameQuestion {
+  const decodedTitle = decodeEntities(question.title);
   const bodyExcerpt = excerptBody(question.body, 500);
 
   const questionText = bodyExcerpt
-    ? `${question.title}\n\n${bodyExcerpt}`
-    : question.title;
+    ? `${decodedTitle}\n\n${bodyExcerpt}`
+    : decodedTitle;
 
-  // Correct answer is the top answer body (stripped) — used for evaluation
   const correctAnswer = question.top_answer_body
     ? stripHtml(question.top_answer_body)
     : question.body_markdown || stripHtml(question.body);
@@ -246,18 +411,63 @@ export function buildStringAnswer(question: SoQuestion): GameQuestion {
 
 /**
  * Format a SO question into a GameQuestion for any question type.
- * Pass pool[] for MCQ distractor generation.
  */
 export function formatQuestion(
   question: SoQuestion,
-  type: QuestionType,
+  type: QuestionType | 'cloze' | 'answer_mcq' | 'true_false',
   pool: SoQuestion[] = []
 ): GameQuestion {
-  switch (type) {
-    case 'mcq':          return buildMCQ(question, pool);
-    case 'fill_in_blank': return buildFillInBlank(question);
-    case 'string_answer': return buildStringAnswer(question);
+  // Use pre-generated variant if available
+  const stored = (question as any).variants as Record<string, MCQVariant> | null;
+  const key = type === 'true_false' ? (stored?.true_false ? 'true_false' : 'tf') : 
+              (type === 'answer_mcq' ? (stored?.answer_mcq ? 'answer_mcq' : 'answer') : type);
+  if (stored?.[key]) {
+    const sVar = stored[key];
+    return {
+      question,
+      question_type: sVar.question_type as any,
+      question_text: sVar.question_text,
+      options: sVar.options,
+      correct_answer: sVar.correct_answer,
+      time_limit: sVar.time_limit,
+      hint: type === 'mcq' ? `Tags on this question: ${question.tags.slice(0, 2).join(', ')}` : undefined,
+    };
   }
+
+  // Fallback: generate live (only happens before cacheQuestions has run variants)
+  const distractorPool = findDistractorQuestions(question, pool);
+  let variant: MCQVariant | null = null;
+  switch (type) {
+    case 'cloze':
+      variant = buildCloze(question, distractorPool);
+      break;
+    case 'answer_mcq':
+      variant = buildAnswerMCQ(question, distractorPool);
+      break;
+    case 'true_false':
+      variant = buildTrueFalse(question, distractorPool);
+      break;
+    case 'mcq':
+      variant = buildTagMCQ(question, distractorPool.length > 0 ? distractorPool : pool);
+      break;
+  }
+
+  if (variant) {
+    return {
+      question,
+      question_type: variant.question_type as any,
+      question_text: variant.question_text,
+      options: variant.options,
+      correct_answer: variant.correct_answer,
+      time_limit: variant.time_limit,
+      hint: type === 'mcq' ? `Tags on this question: ${question.tags.slice(0, 2).join(', ')}` : undefined,
+    };
+  }
+
+  // Final fallback
+  if (type === 'fill_in_blank') return buildFillInBlank(question);
+  if (type === 'string_answer') return buildStringAnswer(question);
+  return buildMCQ(question, pool);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

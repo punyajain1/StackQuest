@@ -18,12 +18,13 @@ export const startPuzzleSchema = z.object({
 export const getQuestionSchema = z.object({
   session_id: z.string().uuid(),
   difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
+  question_type: z.string().optional(),
 });
 
 export const evaluateSchema = z.object({
   session_id: z.string().uuid(),
   question_id: z.number().int().positive(),
-  question_type: z.enum(['mcq', 'fill_in_blank', 'string_answer']),
+  question_type: z.enum(['mcq', 'fill_in_blank', 'string_answer', 'cloze', 'answer_mcq', 'true_false']),
   player_answer: z.string().optional(),
   player_choice: z.string().optional(),
   time_taken_ms: z.number().int().min(0).max(300000),
@@ -72,8 +73,8 @@ export async function startPuzzle(req: Request, res: Response, next: NextFunctio
 
 export async function getNextQuestion(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { session_id, difficulty } = req.query as unknown as z.infer<typeof getQuestionSchema>;
-    const question = await gameService.getNextQuestion(session_id, difficulty as Difficulty | undefined);
+    const { session_id, difficulty, question_type } = req.query as unknown as z.infer<typeof getQuestionSchema>;
+    const question = await gameService.getNextQuestion(session_id, difficulty as Difficulty | undefined, question_type);
     res.json({ success: true, data: question });
   } catch (err) { next(err); }
 }

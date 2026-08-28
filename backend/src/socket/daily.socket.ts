@@ -219,7 +219,7 @@ export function registerDailyHandlers(namespace: Namespace): void {
 
         // Pick question types: cycle through all 3 types
         const types: QuestionType[] = soQuestions.map((_, i) => {
-          const cycle: QuestionType[] = ['mcq', 'fill_in_blank', 'string_answer'];
+          const cycle: QuestionType[] = ['mcq'/*, 'fill_in_blank', 'string_answer'*/];
           return cycle[i % cycle.length];
         });
 

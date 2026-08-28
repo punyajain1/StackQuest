@@ -99,6 +99,7 @@ model Friendship {
   receiver User @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
 
   @@unique([senderId, receiverId])
+  @@index([receiverId, status])
   @@map("friendships")
 }
 
@@ -153,6 +154,9 @@ model DuelMatch {
   player2   User?          @relation("player2", fields: [player2Id], references: [id])
   questions DuelQuestion[]
 
+  @@index([status, player1Elo])
+  @@index([player1Id, status])
+  @@index([player2Id, status])
   @@map("duel_matches")
 }
 
@@ -200,6 +204,8 @@ model GameSession {
   questionAnswers    QuestionAnswer[]
   leaderboardEntries LeaderboardEntry[]
 
+  @@index([userId, mode, dailyDate])
+  @@index([mode, score])
   @@map("game_sessions")
 }
 
@@ -241,7 +247,10 @@ model SoQuestionCache {
   isAnswered       Boolean    @default(false) @map("is_answered")
   creationDate     DateTime   @map("creation_date") @db.Timestamptz
   lastFetched      DateTime   @default(now()) @map("last_fetched") @db.Timestamptz
+  variants         Json?      // NEW — stores pre-generated MCQ variants
 
+  @@index([isAnswered, difficulty])
+  @@index([lastFetched])
   @@map("so_question_cache")
 }
 
@@ -262,6 +271,8 @@ model LeaderboardEntry {
   user    User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   session GameSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@index([periodWeek, mode, score(sort: Desc)])
+  @@index([userId, periodWeek])
   @@map("leaderboard_entries")
 }
 

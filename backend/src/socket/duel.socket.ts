@@ -57,7 +57,10 @@ async function broadcastQuestion(
 
   const raw = questions[idx];
   const qType = questionTypes[idx];
-  const formatted = formatQuestion(raw, qType, pool);
+
+  const typesByRound = ['mcq', 'cloze', 'true_false', 'answer_mcq', 'mcq'];
+  const rotatedType = qType === 'mcq' ? typesByRound[roundNumber % typesByRound.length] : qType;
+  const formatted = formatQuestion(raw, rotatedType as any, pool);
 
   // Start per-round countdown timer
   const totalSecs = formatted.time_limit;
@@ -83,7 +86,7 @@ async function broadcastQuestion(
   namespace.to(`duel:${matchId}`).emit(DUEL.QUESTION, {
     round_number: roundNumber,
     total_rounds: env.DUEL_ROUNDS,
-    question_type: qType,
+    question_type: rotatedType,
     question_text: formatted.question_text,
     question: {
       question_id: raw.question_id,
@@ -172,8 +175,8 @@ async function broadcastRoundResult(
       matchStateCache.delete(matchId);
 
       // Award achievements to both players
-      if (match.player1Id) achievementService.checkAndAward(match.player1Id).catch(() => {});
-      if (match.player2Id) achievementService.checkAndAward(match.player2Id).catch(() => {});
+      if (match.player1Id) achievementService.checkAndAward(match.player1Id).catch(() => { });
+      if (match.player2Id) achievementService.checkAndAward(match.player2Id).catch(() => { });
     }
   }, 2000);
 }
@@ -340,9 +343,7 @@ export function registerDuelHandlers(namespace: Namespace): void {
         socket.emit('duel:answer_ack', { round_number, correct: result.correct, feedback: result.feedback });
 
         // Check if BOTH players have answered this round
-        const duelQ = await prisma.duelQuestion.findUnique({
-          where: { matchId_roundNumber: { matchId, roundNumber: round_number } },
-        });
+        const duelQ = result.duelQuestion;
 
         if (duelQ && duelQ.player1Answer !== null && duelQ.player2Answer !== null) {
           // Both answered — broadcast result immediately

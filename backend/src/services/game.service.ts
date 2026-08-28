@@ -14,7 +14,7 @@ import type {
 
 // ─── Question type cycle ─────────────────────────────────────
 
-const QUESTION_TYPES: QuestionType[] = ['mcq', 'fill_in_blank', 'string_answer'];
+const QUESTION_TYPES: QuestionType[] = ['mcq'/*, 'fill_in_blank', 'string_answer'*/];
 
 function pickQuestionType(): QuestionType {
   return QUESTION_TYPES[Math.floor(Math.random() * QUESTION_TYPES.length)];
@@ -95,7 +95,7 @@ export class GameService {
 
   // ─── Get Next Question ────────────────────────────────────
 
-  async getNextQuestion(sessionId: string, difficulty?: Difficulty): Promise<GameQuestion> {
+  async getNextQuestion(sessionId: string, difficulty?: Difficulty, questionType?: string): Promise<GameQuestion> {
     const session = this.getActiveSession(sessionId);
     let question: SoQuestion;
 
@@ -111,12 +111,16 @@ export class GameService {
       });
     }
 
-    const qType = pickQuestionType();
+    let qType = (questionType as QuestionType) || pickQuestionType();
+    if (qType === 'mcq') {
+      const mcqVariants = ['mcq', 'cloze', 'true_false', 'answer_mcq'];
+      qType = mcqVariants[Math.floor(Math.random() * mcqVariants.length)] as any;
+    }
     return this.buildGameQuestion(question, qType, session.preloaded_questions);
   }
 
   private buildGameQuestion(
-    question: SoQuestion, qType: QuestionType, allQuestions: SoQuestion[]
+    question: SoQuestion, qType: any, allQuestions: SoQuestion[]
   ): GameQuestion {
     return formatQuestion(question, qType, allQuestions);
   }
@@ -124,12 +128,12 @@ export class GameService {
   // ─── Evaluate Answer ─────────────────────────────────────
 
   async evaluateAnswer(opts: {
-    sessionId: string; questionId: number; questionType: QuestionType;
+    sessionId: string; questionId: number; questionType: any;
     playerAnswer?: string; playerChoice?: string; timeTakenMs: number;
     question: SoQuestion;
   }): Promise<{
     correct: boolean; scoreEarned: number; xpEarned: number;
-    feedback?: string; snapshot: SessionSnapshot;
+    feedback?: string; correctAnswer: string; snapshot: SessionSnapshot;
   }> {
     const { sessionId, questionId, questionType, playerAnswer, playerChoice, timeTakenMs, question } = opts;
     const session = this.getActiveSession(sessionId);
@@ -142,26 +146,36 @@ export class GameService {
     let scoreEarned = 0;
     let xpEarned = 0;
     let feedback: string | undefined;
+    let correctAnswer = '';
 
     let evalResult;
-    const qTypeAlg = questionType === 'fill_in_blank' ? 'fill_in_the_blank' : questionType;
+    const isCustomMCQ = ['cloze', 'answer_mcq', 'true_false'].includes(questionType);
+    const qTypeAlg = isCustomMCQ
+      ? 'mcq'
+      : (questionType === 'fill_in_blank' ? 'fill_in_the_blank' : questionType);
 
     switch (questionType) {
+      case 'cloze':
+      case 'answer_mcq':
+      case 'true_false':
       case 'mcq': {
-        if (!playerChoice) throw AppError.badRequest('playerChoice required for MCQ');
-        const formatted = formatQuestion(question, 'mcq', []);
+        if (!playerChoice) throw AppError.badRequest('playerChoice required for MCQ/Cloze/TF');
+        const formatted = formatQuestion(question, questionType, []);
+        correctAnswer = formatted.correct_answer;
         evalResult = evaluateAnswer('mcq', playerChoice, formatted.correct_answer);
         break;
       }
       case 'fill_in_blank': {
         if (!playerAnswer) throw AppError.badRequest('playerAnswer required for fill_in_blank');
         const formatted = formatQuestion(question, 'fill_in_blank', []);
+        correctAnswer = formatted.correct_answer;
         evalResult = evaluateAnswer('fill_in_the_blank', playerAnswer, formatted.correct_answer);
         break;
       }
       case 'string_answer': {
         if (!playerAnswer) throw AppError.badRequest('playerAnswer required for string_answer');
         const formatted = formatQuestion(question, 'string_answer', []);
+        correctAnswer = formatted.correct_answer;
         evalResult = evaluateAnswer('string_answer', playerAnswer, formatted.correct_answer);
         break;
       }
@@ -204,13 +218,14 @@ export class GameService {
     // Persist individual answer
     await prisma.questionAnswer.create({
       data: {
-        sessionId, soQuestionId: questionId, questionType,
+        sessionId, soQuestionId: questionId,
+        questionType: isCustomMCQ ? 'mcq' : questionType,
         playerAnswer: playerAnswer ?? null, playerChoice: playerChoice ?? null,
         correct, scoreEarned, xpEarned, timeTakenMs,
       },
     });
 
-    return { correct, scoreEarned, xpEarned, feedback, snapshot: this.buildSnapshot(session) };
+    return { correct, scoreEarned, xpEarned, feedback, correctAnswer, snapshot: this.buildSnapshot(session) };
   }
 
   // ─── End Session ─────────────────────────────────────────
@@ -221,47 +236,44 @@ export class GameService {
     const accuracy = session.questions_answered > 0
       ? session.correct_count / session.questions_answered : 0;
 
-    const finalSession = await prisma.gameSession.update({
-      where: { id: sessionId },
-      data: {
-        score: session.score, accuracy, streakPeak: session.streak_peak,
-        questionsCount: session.questions_answered, correctCount: session.correct_count,
-        durationSecs, xpEarned: session.xp_earned,
-      },
-    });
-
-    // Update user XP + streak
+    // Fetch user data BEFORE the transaction (pure read)
     const currentUser = await prisma.user.findUnique({
       where: { id: session.user_id },
-      select: { xp: true, maxStreak: true },
+      select: { xp: true, maxStreak: true, username: true },
     });
 
     const newXp = (currentUser?.xp ?? 0) + session.xp_earned;
     const progression = calculateXPProgression(newXp);
     const newLevel = progression.level;
     const newMaxStreak = Math.max(currentUser?.maxStreak ?? 0, session.streak_peak);
+    const periodWeek = this.getISOWeek(new Date());
 
-    await prisma.user.update({
-      where: { id: session.user_id },
-      data: {
-        xp: newXp, level: newLevel, maxStreak: newMaxStreak,
-        totalGames: { increment: 1 }, lastActive: new Date(),
-      },
-    });
-
-    // Leaderboard entry
-    const user = await prisma.user.findUnique({
-      where: { id: session.user_id }, select: { username: true },
-    });
-
-    await prisma.leaderboardEntry.create({
-      data: {
-        sessionId, userId: session.user_id,
-        username: user?.username ?? 'Guest', score: session.score,
-        mode: session.mode, tag: session.tag,
-        periodWeek: this.getISOWeek(new Date()),
-      },
-    });
+    // Atomic transaction — all 3 writes succeed or none do
+    const [finalSession] = await prisma.$transaction([
+      prisma.gameSession.update({
+        where: { id: sessionId },
+        data: {
+          score: session.score, accuracy, streakPeak: session.streak_peak,
+          questionsCount: session.questions_answered, correctCount: session.correct_count,
+          durationSecs, xpEarned: session.xp_earned,
+        },
+      }),
+      prisma.user.update({
+        where: { id: session.user_id },
+        data: {
+          xp: newXp, level: newLevel, maxStreak: newMaxStreak,
+          totalGames: { increment: 1 }, lastActive: new Date(),
+        },
+      }),
+      prisma.leaderboardEntry.create({
+        data: {
+          sessionId, userId: session.user_id,
+          username: currentUser?.username ?? 'Guest', score: session.score,
+          mode: session.mode, tag: session.tag,
+          periodWeek,
+        },
+      }),
+    ]);
 
     activeSessions.delete(sessionId);
     logger.info({ sessionId, score: session.score }, 'Game session ended');

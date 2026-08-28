@@ -54,6 +54,7 @@ export interface SoQuestion {
   is_answered: boolean;
   creation_date: number;    // Unix timestamp
   owner_display_name?: string;
+  variants?: any;
 }
 
 export interface SoAnswer {

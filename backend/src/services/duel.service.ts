@@ -9,8 +9,9 @@ import type {
   QuestionType, SoQuestion, DuelState, DuelPlayerInfo,
   DuelQuestionPayload, DuelResult, DuelPlayerResult,
 } from '../models/db.types';
+import { formatQuestion } from '../utils/questionFormatter';
 
-const QUESTION_TYPES: QuestionType[] = ['mcq', 'fill_in_blank', 'string_answer'];
+const QUESTION_TYPES: QuestionType[] = ['mcq'/*, 'fill_in_blank', 'string_answer'*/];
 
 function pickQuestionType(): QuestionType {
   return QUESTION_TYPES[Math.floor(Math.random() * QUESTION_TYPES.length)];
@@ -53,21 +54,23 @@ export class DuelService {
       include: { player1: { select: { id: true, username: true, avatarUrl: true, elo: true } } },
     });
 
-    // Pre-generate duel questions
-    for (let i = 0; i < questions.length; i++) {
+    // Pre-generate duel questions in a single batch insert
+    const duelQuestionData = questions.map((question, i) => {
       const qType = pickQuestionType();
-      const correctAnswer = generateCorrectAnswer(questions[i], qType);
-      const options = qType === 'mcq' ? generateOptions(questions[i], questions) : null;
+      const correctAnswer = generateCorrectAnswer(question, qType);
+      const options = qType === 'mcq' ? generateOptions(question, questions) : null;
+      return {
+        matchId: match.id,
+        roundNumber: i + 1,
+        soQuestionId: question.question_id,
+        questionType: qType,
+        questionData: JSON.parse(JSON.stringify(question)),
+        correctAnswer,
+        options: options ? options : undefined,
+      };
+    });
 
-      await prisma.duelQuestion.create({
-        data: {
-          matchId: match.id, roundNumber: i + 1,
-          soQuestionId: questions[i].question_id, questionType: qType,
-          questionData: JSON.parse(JSON.stringify(questions[i])),
-          correctAnswer, options: options ? options : undefined,
-        },
-      });
-    }
+    await prisma.duelQuestion.createMany({ data: duelQuestionData });
 
     logger.info({ matchId: match.id, userId }, 'Duel created');
     return this.getDuelState(match.id);
@@ -130,7 +133,7 @@ export class DuelService {
   }
 
   async submitAnswer(matchId: string, userId: string, roundNumber: number, answer: string, timeMs: number): Promise<{
-    correct: boolean; round_number: number; feedback?: string;
+    correct: boolean; round_number: number; feedback?: string; duelQuestion: any;
   }> {
     const match = await prisma.duelMatch.findUnique({ where: { id: matchId } });
     if (!match) throw AppError.notFound('Duel not found');
@@ -153,21 +156,37 @@ export class DuelService {
     let correct = false;
     let feedback: string | undefined;
 
-    switch (duelQ.questionType) {
+    let evalCorrectAnswer = duelQ.correctAnswer;
+    let evalQuestionType: any = duelQ.questionType;
+
+    if (duelQ.questionType === 'mcq') {
+      const typesByRound = ['mcq', 'cloze', 'true_false', 'answer_mcq', 'mcq'];
+      const rotatedType = typesByRound[roundNumber % typesByRound.length];
+      if (rotatedType && rotatedType !== 'mcq') {
+        const formatted = formatQuestion(duelQ.questionData as any, rotatedType as any);
+        evalCorrectAnswer = formatted.correct_answer;
+        evalQuestionType = rotatedType;
+      }
+    }
+
+    switch (evalQuestionType) {
+      case 'cloze':
+      case 'answer_mcq':
+      case 'true_false':
       case 'mcq': {
-        const result = evaluateAnswer('mcq', answer, duelQ.correctAnswer);
+        const result = evaluateAnswer('mcq', answer, evalCorrectAnswer);
         correct = result.isCorrect;
         feedback = result.details;
         break;
       }
       case 'fill_in_blank': {
-        const result = evaluateAnswer('fill_in_the_blank', answer, duelQ.correctAnswer);
+        const result = evaluateAnswer('fill_in_the_blank', answer, evalCorrectAnswer);
         correct = result.isCorrect;
         feedback = result.details;
         break;
       }
       case 'string_answer': {
-        const result = evaluateAnswer('string_answer', answer, duelQ.correctAnswer);
+        const result = evaluateAnswer('string_answer', answer, evalCorrectAnswer);
         correct = result.isCorrect;
         feedback = result.details;
         break;
@@ -179,21 +198,27 @@ export class DuelService {
       ? { player1Answer: answer, player1Correct: correct, player1TimeMs: timeMs }
       : { player2Answer: answer, player2Correct: correct, player2TimeMs: timeMs };
 
-    await prisma.duelQuestion.update({ where: { id: duelQ.id }, data: updateData });
+    // Save answer + update score atomically
+    const scoreField = isPlayer1 ? 'player1Score' : 'player2Score';
 
-    // Update match score
-    if (correct) {
-      const scoreField = isPlayer1 ? 'player1Score' : 'player2Score';
-      await prisma.duelMatch.update({
-        where: { id: matchId },
-        data: { [scoreField]: { increment: 1 } },
-      });
+    const [updatedDuelQ] = await prisma.$transaction([
+      prisma.duelQuestion.update({ where: { id: duelQ.id }, data: updateData }),
+      ...(correct
+        ? [
+            prisma.duelMatch.update({
+              where: { id: matchId },
+              data: { [scoreField]: { increment: 1 } },
+            }),
+          ]
+        : []),
+    ]);
+
+    // Check if duel is complete (only on the final round)
+    if (roundNumber === match.rounds) {
+      await this.checkDuelCompletion(matchId);
     }
 
-    // Check if duel is complete
-    await this.checkDuelCompletion(matchId);
-
-    return { correct, round_number: roundNumber, feedback };
+    return { correct, round_number: roundNumber, feedback, duelQuestion: updatedDuelQ };
   }
 
   async getDuelState(matchId: string): Promise<DuelState> {
@@ -279,7 +304,7 @@ export class DuelService {
       where: { id: matchId },
       include: { questions: true },
     });
-    if (!match) return;
+    if (!match || match.status !== 'active') return;
 
     const allAnswered = match.questions.every((q) =>
       q.player1Answer !== null && q.player2Answer !== null
@@ -291,11 +316,16 @@ export class DuelService {
     if (match.player1Score > match.player2Score) winnerId = match.player1Id;
     else if (match.player2Score > match.player1Score) winnerId = match.player2Id;
 
-    // ELO calculation using standard algorithm
-    const p1Elo = (await prisma.user.findUnique({ where: { id: match.player1Id }, select: { elo: true } }))?.elo ?? 1000;
-    const p2Elo = match.player2Id
-      ? (await prisma.user.findUnique({ where: { id: match.player2Id }, select: { elo: true } }))?.elo ?? 1000
-      : 1000;
+    // ELO calculation using standard algorithm & parallel DB reads
+    const [p1, p2] = await Promise.all([
+      prisma.user.findUnique({ where: { id: match.player1Id }, select: { elo: true, totalDuels: true, duelsWon: true } }),
+      match.player2Id
+        ? prisma.user.findUnique({ where: { id: match.player2Id }, select: { elo: true, totalDuels: true, duelsWon: true } })
+        : Promise.resolve(null),
+    ]);
+
+    const p1Elo = p1?.elo ?? 1000;
+    const p2Elo = p2?.elo ?? 1000;
 
     let eloChange1 = 0;
     if (winnerId === null) {
@@ -309,48 +339,61 @@ export class DuelService {
     
     const eloChange2 = -eloChange1;
 
-    await prisma.duelMatch.update({
-      where: { id: matchId },
-      data: {
-        status: 'completed', winnerId, completedAt: new Date(),
-        player1Elo: eloChange1, player2Elo: eloChange2,
-      },
-    });
+    // Pre-calculate new win rates in memory to avoid post-transaction updates
+    const newTotal1 = (p1?.totalDuels ?? 0) + 1;
+    const newWon1 = (p1?.duelsWon ?? 0) + (winnerId === match.player1Id ? 1 : 0);
+    const newWinRate1 = newTotal1 > 0 ? newWon1 / newTotal1 : 0;
 
-    // Update user ELO and stats
-    await prisma.user.update({
-      where: { id: match.player1Id },
-      data: {
-        elo: { increment: eloChange1 }, totalDuels: { increment: 1 },
-        ...(winnerId === match.player1Id ? { duelsWon: { increment: 1 } } : {}),
-        totalGames: { increment: 1 }, lastActive: new Date(),
-      },
-    });
-
-    if (match.player2Id) {
-      await prisma.user.update({
-        where: { id: match.player2Id },
-        data: {
-          elo: { increment: eloChange2 }, totalDuels: { increment: 1 },
-          ...(winnerId === match.player2Id ? { duelsWon: { increment: 1 } } : {}),
-          totalGames: { increment: 1 }, lastActive: new Date(),
-        },
-      });
-
-      // Recalculate win rates
-      for (const pid of [match.player1Id, match.player2Id]) {
-        const u = await prisma.user.findUnique({ where: { id: pid }, select: { totalDuels: true, duelsWon: true } });
-        if (u && u.totalDuels > 0) {
-          await prisma.user.update({
-            where: { id: pid },
-            data: { winRate: u.duelsWon / u.totalDuels },
-          });
-        }
-      }
+    let newTotal2 = 0;
+    let newWon2 = 0;
+    let newWinRate2 = 0;
+    if (match.player2Id && p2) {
+      newTotal2 = p2.totalDuels + 1;
+      newWon2 = p2.duelsWon + (winnerId === match.player2Id ? 1 : 0);
+      newWinRate2 = newTotal2 > 0 ? newWon2 / newTotal2 : 0;
     }
+
+    // Single atomic transaction for match completion + ELO settlement
+    await prisma.$transaction([
+      // 1. Close the match
+      prisma.duelMatch.update({
+        where: { id: matchId },
+        data: {
+          status: 'completed', winnerId, completedAt: new Date(),
+          player1Elo: eloChange1, player2Elo: eloChange2,
+        },
+      }),
+
+      // 2. Update Player 1
+      prisma.user.update({
+        where: { id: match.player1Id },
+        data: {
+          elo: { increment: eloChange1 }, totalDuels: { increment: 1 },
+          ...(winnerId === match.player1Id ? { duelsWon: { increment: 1 } } : {}),
+          totalGames: { increment: 1 }, lastActive: new Date(),
+          winRate: newWinRate1,
+        },
+      }),
+
+      // 3. Update Player 2 (if exists)
+      ...(match.player2Id
+        ? [
+            prisma.user.update({
+              where: { id: match.player2Id },
+              data: {
+                elo: { increment: eloChange2 }, totalDuels: { increment: 1 },
+                ...(winnerId === match.player2Id ? { duelsWon: { increment: 1 } } : {}),
+                totalGames: { increment: 1 }, lastActive: new Date(),
+                winRate: newWinRate2,
+              },
+            }),
+          ]
+        : []),
+    ]);
 
     logger.info({ matchId, winnerId, eloChange1, eloChange2 }, 'Duel completed');
   }
 }
 
 export const duelService = new DuelService();
+

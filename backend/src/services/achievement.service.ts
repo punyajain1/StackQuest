@@ -45,6 +45,20 @@ export class AchievementService {
     const unlockedIds = new Set(unlocked.map((u) => u.achievementId));
 
     const newlyUnlocked: AchievementInfo[] = [];
+    const achievementsToInsert: Array<{ userId: string; achievementId: string }> = [];
+
+    // Pre-calculate queries if there are locked achievements of specific types
+    const needsCorrectAnswers = allAchievements.some((a) => !unlockedIds.has(a.id) && (a.criteria as any)?.type === 'correct_answers');
+    const needsDailyCompleted = allAchievements.some((a) => !unlockedIds.has(a.id) && (a.criteria as any)?.type === 'daily_completed');
+
+    const [correctAnswersCount, dailyCompletedCount] = await Promise.all([
+      needsCorrectAnswers
+        ? prisma.questionAnswer.count({ where: { session: { userId }, correct: true } })
+        : Promise.resolve(0),
+      needsDailyCompleted
+        ? prisma.gameSession.count({ where: { userId, mode: 'daily_challenge' } })
+        : Promise.resolve(0),
+    ]);
 
     for (const achievement of allAchievements) {
       if (unlockedIds.has(achievement.id)) continue;
@@ -59,21 +73,17 @@ export class AchievementService {
         case 'elo': earned = user.elo >= (criteria.threshold as number); break;
         case 'league': earned = user.league === criteria.threshold; break;
         case 'correct_answers': {
-          const count = await prisma.questionAnswer.count({ where: { session: { userId }, correct: true } });
-          earned = count >= (criteria.threshold as number);
+          earned = correctAnswersCount >= (criteria.threshold as number);
           break;
         }
         case 'daily_completed': {
-          const count = await prisma.gameSession.count({ where: { userId, mode: 'daily_challenge' } });
-          earned = count >= (criteria.threshold as number);
+          earned = dailyCompletedCount >= (criteria.threshold as number);
           break;
         }
       }
 
       if (earned) {
-        await prisma.userAchievement.create({
-          data: { userId, achievementId: achievement.id },
-        });
+        achievementsToInsert.push({ userId, achievementId: achievement.id });
         newlyUnlocked.push({
           id: achievement.id, key: achievement.key, name: achievement.name,
           description: achievement.description, icon: achievement.icon,
@@ -83,7 +93,11 @@ export class AchievementService {
       }
     }
 
-    if (newlyUnlocked.length > 0) {
+    if (achievementsToInsert.length > 0) {
+      await prisma.userAchievement.createMany({
+        data: achievementsToInsert,
+        skipDuplicates: true,
+      });
       logger.info({ userId, count: newlyUnlocked.length }, 'New achievements unlocked');
     }
     return newlyUnlocked;

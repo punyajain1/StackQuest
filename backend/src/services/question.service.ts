@@ -6,6 +6,8 @@ import type { SoQuestionCache, Difficulty } from '../../generated/prisma';
 import type { SoQuestion, CategoryStats } from '../models/db.types';
 import { Prisma } from '../../generated/prisma';
 
+import { buildTagMCQ, buildCloze, buildTrueFalse, buildAnswerMCQ, findDistractorQuestions } from '../utils/questionFormatter';
+
 export const SUPPORTED_TAGS = [
   'javascript', 'python', 'java', 'c#', 'c++', 'php',
   'typescript', 'react', 'node.js', 'css', 'html',
@@ -31,6 +33,7 @@ function dbRowToSoQuestion(row: SoQuestionCache): SoQuestion {
     difficulty: row.difficulty,
     is_answered: row.isAnswered,
     creation_date: Math.floor(row.creationDate.getTime() / 1000),
+    variants: (row as any).variants,
   };
 }
 
@@ -102,22 +105,54 @@ export class QuestionService {
   }
 
   async cacheQuestions(questions: SoQuestion[]): Promise<void> {
-    await Promise.all(questions.map((q) => prisma.soQuestionCache.upsert({
-      where: { questionId: q.question_id },
-      create: {
-        questionId: q.question_id, title: q.title, body: q.body, bodyMarkdown: q.body_markdown,
-        tags: q.tags, score: q.score, answerCount: q.answer_count, acceptedAnswerId: q.accepted_answer_id,
-        topAnswerBody: q.top_answer_body, topAnswerScore: q.top_answer_score, topAnswerAuthor: q.top_answer_author,
-        viewCount: q.view_count, difficulty: q.difficulty, isAnswered: q.is_answered,
-        creationDate: new Date(q.creation_date * 1000),
-      },
-      update: {
-        score: q.score, answerCount: q.answer_count, topAnswerBody: q.top_answer_body ?? undefined,
-        topAnswerScore: q.top_answer_score ?? undefined, topAnswerAuthor: q.top_answer_author ?? undefined,
-        difficulty: q.difficulty, lastFetched: new Date(),
-      },
-    })));
+    const data = questions.map((q) => ({
+      questionId: q.question_id,
+      title: q.title,
+      body: q.body,
+      bodyMarkdown: q.body_markdown,
+      tags: q.tags,
+      score: q.score,
+      answerCount: q.answer_count,
+      acceptedAnswerId: q.accepted_answer_id,
+      topAnswerBody: q.top_answer_body,
+      topAnswerScore: q.top_answer_score,
+      topAnswerAuthor: q.top_answer_author,
+      viewCount: q.view_count,
+      difficulty: q.difficulty,
+      isAnswered: q.is_answered,
+      creationDate: new Date(q.creation_date * 1000),
+    }));
+
+    await prisma.soQuestionCache.createMany({
+      data,
+      skipDuplicates: true,
+    });
     logger.info({ count: questions.length }, 'Questions cached to DB');
+
+    // Pre-generate MCQ variants and update them in database
+    const cachedRows = await prisma.soQuestionCache.findMany({
+      where: { questionId: { in: questions.map((q) => q.question_id) } }
+    });
+
+    for (const row of cachedRows) {
+      const question = dbRowToSoQuestion(row);
+      // Construct distractor pool from all cached questions
+      const pool = cachedRows.map(dbRowToSoQuestion);
+      const distractorPool = findDistractorQuestions(question, pool);
+
+      const variants = {
+        mcq: buildTagMCQ(question, distractorPool),
+        cloze: buildCloze(question, distractorPool),
+        true_false: buildTrueFalse(question, distractorPool),
+        answer_mcq: buildAnswerMCQ(question, distractorPool),
+      };
+
+      await prisma.soQuestionCache.update({
+        where: { questionId: row.questionId },
+        data: { variants } as any,
+      });
+    }
+    logger.info({ count: questions.length }, 'Variants pre-generated and saved to DB');
   }
 
   async getCategoryStats(): Promise<CategoryStats[]> {
@@ -133,8 +168,12 @@ export class QuestionService {
     let ids: number[];
     if (existing) { ids = existing.questionIds; }
     else {
+      const todayStr = today.toISOString().slice(0, 10); // "2026-05-23"
       const rows = await prisma.$queryRaw<Array<{ question_id: number }>>`
-        SELECT question_id FROM so_question_cache WHERE is_answered = TRUE AND top_answer_body IS NOT NULL ORDER BY RANDOM() LIMIT 10`;
+        SELECT question_id FROM so_question_cache
+        WHERE is_answered = TRUE AND top_answer_body IS NOT NULL
+        ORDER BY md5(question_id::text || ${todayStr})
+        LIMIT 10`;
       ids = rows.map((r) => r.question_id);
       await prisma.dailyChallenge.upsert({ where: { date: today }, create: { date: today, questionIds: ids }, update: {} });
     }
