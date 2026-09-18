@@ -98,9 +98,8 @@ function DuelScreen() {
             )}
           </div>
 
-          {/* Response area */}
           <div className="border-t border-hairline bg-background/40 p-6">
-            {q.type === "mcq" ? (
+            {q.type === "mcq" || q.type === "true_false" ? (
               <McqGrid
                 options={q.options ?? []}
                 locked={player.locked}
@@ -115,7 +114,7 @@ function DuelScreen() {
                 onChange={setSubmission}
                 onSubmit={handleSubmit}
                 locked={player.locked}
-                multiline={q.type === "string_answer"}
+                multiline={q.type === "scenario" || q.type === "code_output"}
                 phase={phase}
                 correct={pEval?.correct}
               />
@@ -176,7 +175,7 @@ function highlight(code: string) {
 }
 
 function TypeBadge({ type }: { type: string }) {
-  const label = type === "mcq" ? "MULTIPLE CHOICE" : type === "fill_in_blank" ? "FILL IN THE BLANK" : "FREE-TEXT ANSWER";
+  const label = type.replace('_', ' ').toUpperCase();
   return (
     <span className="border border-accent text-accent px-2 py-0.5 text-[10px] uppercase tracking-widest">
       {label}

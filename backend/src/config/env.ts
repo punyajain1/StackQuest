@@ -22,6 +22,10 @@ const envSchema = z.object({
   SO_API_BASE: z.string().url().default('https://api.stackexchange.com/2.3'),
   SO_SITE: z.string().default('stackoverflow'),
 
+  // Groq LLM
+  GROQ_API_KEY: z.string().min(1, 'GROQ_API_KEY is required'),
+  GROQ_MODEL: z.string().default('llama-3.1-8b-instant'),
+
   // Game Config
   QUESTION_POOL_MIN: z.string().default('50').transform(Number),
   QUESTION_POOL_REFRESH_HOURS: z.string().default('6').transform(Number),

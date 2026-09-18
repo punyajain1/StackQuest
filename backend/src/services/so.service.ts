@@ -3,7 +3,39 @@ import { env } from '../config/env';
 import { cache } from '../utils/cache';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
-import type { SoQuestion, SoAnswer, Difficulty } from '../models/db.types';
+import type { Difficulty } from '../models/db.types';
+
+export interface SoQuestion {
+  question_id: number;
+  title: string;
+  body: string;             // HTML — strip before display
+  body_markdown: string;    // Raw markdown (from custom SO filter)
+  tags: string[];
+  score: number;
+  answer_count: number;
+  accepted_answer_id: number | null;
+  top_answer_body: string | null;   // HTML — strip before display
+  top_answer_score: number | null;
+  top_answer_author: string | null;
+  view_count: number;
+  difficulty: Difficulty;
+  is_answered: boolean;
+  creation_date: number;    // Unix timestamp
+  owner_display_name?: string;
+}
+
+export interface SoAnswer {
+  answer_id: number;
+  question_id: number;
+  score: number;
+  is_accepted: boolean;
+  body: string;
+  body_markdown: string;
+  owner: {
+    display_name: string;
+    reputation: number;
+  };
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const QUOTA_CACHE_KEY = 'so:quota_remaining';

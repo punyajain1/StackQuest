@@ -3,12 +3,10 @@ import { DUEL } from './events';
 import { duelService } from '../services/duel.service';
 import { authService } from '../services/auth.service';
 import { questionService } from '../services/question.service';
-import { evaluationService } from '../services/evaluation.service';
 import { achievementService } from '../services/achievement.service';
-import { formatQuestion } from '../utils/questionFormatter';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
-import type { UserPayload, SoQuestion, QuestionType } from '../models/db.types';
+import type { UserPayload, QuestionType } from '../models/db.types';
 import { prisma } from '../config/prisma';
 
 // ─── Per-round timer tracking ─────────────────────────────────────────────────
@@ -48,24 +46,25 @@ async function broadcastQuestion(
   namespace: Namespace,
   matchId: string,
   roundNumber: number,
-  questions: SoQuestion[],
-  questionTypes: QuestionType[],
-  pool: SoQuestion[],
+  duelQuestions: any[],
 ): Promise<void> {
   const idx = roundNumber - 1;
-  if (idx >= questions.length) return;
+  if (idx >= duelQuestions.length) return;
 
-  const raw = questions[idx];
-  const qType = questionTypes[idx];
-
-  const typesByRound = ['mcq', 'cloze', 'true_false', 'answer_mcq', 'mcq'];
-  const rotatedType = qType === 'mcq' ? typesByRound[roundNumber % typesByRound.length] : qType;
-  const formatted = formatQuestion(raw, rotatedType as any, pool);
+  const duelQ = duelQuestions[idx];
+  const qData = duelQ.questionData;
+  const qType = duelQ.questionType;
 
   // Start per-round countdown timer
-  const totalSecs = formatted.time_limit;
+  const totalSecs = env.DUEL_TIME_LIMIT_SECS;
   let remaining = totalSecs;
   const timerKey = `${matchId}:${roundNumber}`;
+
+  // Clear existing timer if one is already running for this round
+  if (roundTimers.has(timerKey)) {
+    clearInterval(roundTimers.get(timerKey));
+    roundTimers.delete(timerKey);
+  }
 
   const interval = setInterval(() => {
     remaining--;
@@ -75,7 +74,7 @@ async function broadcastQuestion(
       clearInterval(interval);
       roundTimers.delete(timerKey);
       // Auto-submit empty answer for anyone who didn't answer
-      autoCompleteRound(namespace, matchId, roundNumber, formatted.correct_answer, pool, questions, questionTypes).catch(
+      autoCompleteRound(namespace, matchId, roundNumber, duelQ.correctAnswer, duelQuestions).catch(
         (err) => logger.error({ err, matchId, roundNumber }, 'Auto-complete round failed'),
       );
     }
@@ -86,17 +85,9 @@ async function broadcastQuestion(
   namespace.to(`duel:${matchId}`).emit(DUEL.QUESTION, {
     round_number: roundNumber,
     total_rounds: env.DUEL_ROUNDS,
-    question_type: rotatedType,
-    question_text: formatted.question_text,
-    question: {
-      question_id: raw.question_id,
-      title: raw.title,
-      tags: raw.tags,
-      score: raw.score,
-    },
-    options: formatted.options,
-    blank_text: formatted.blank_text,
-    hint: formatted.hint,
+    question_type: qType,
+    question_text: qData.question,
+    options: qData.options,
     time_limit: totalSecs,
     correct_answer: undefined, // NEVER send correct answer to client during round
   });
@@ -107,9 +98,7 @@ async function autoCompleteRound(
   matchId: string,
   roundNumber: number,
   correctAnswer: string,
-  pool: SoQuestion[],
-  questions: SoQuestion[],
-  questionTypes: QuestionType[],
+  duelQuestions: any[],
 ): Promise<void> {
   const match = await prisma.duelMatch.findUnique({
     where: { id: matchId },
@@ -127,7 +116,7 @@ async function autoCompleteRound(
     await prisma.duelQuestion.update({ where: { id: duelQ.id }, data: { player2Answer: '', player2Correct: false, player2TimeMs: env.DUEL_TIME_LIMIT_SECS * 1000 } });
   }
 
-  await broadcastRoundResult(namespace, matchId, roundNumber, correctAnswer, pool, questions, questionTypes);
+  await broadcastRoundResult(namespace, matchId, roundNumber, correctAnswer, duelQuestions);
 }
 
 async function broadcastRoundResult(
@@ -135,9 +124,7 @@ async function broadcastRoundResult(
   matchId: string,
   roundNumber: number,
   correctAnswer: string,
-  pool: SoQuestion[],
-  questions: SoQuestion[],
-  questionTypes: QuestionType[],
+  duelQuestions: any[],
 ): Promise<void> {
   clearRoundTimer(matchId, roundNumber);
 
@@ -163,7 +150,7 @@ async function broadcastRoundResult(
   // Wait 2 s then broadcast next question or finish
   setTimeout(async () => {
     if (roundNumber < match.rounds) {
-      await broadcastQuestion(namespace, matchId, roundNumber + 1, questions, questionTypes, pool);
+      await broadcastQuestion(namespace, matchId, roundNumber + 1, duelQuestions);
     } else {
       // Match complete — duelService handles ELO/stats
       await duelService.completeDuel(matchId);
@@ -184,9 +171,7 @@ async function broadcastRoundResult(
 // ─── Match state cache ────────────────────────────────────────────────────────
 
 interface MatchState {
-  questions: SoQuestion[];
-  questionTypes: QuestionType[];
-  pool: SoQuestion[];
+  duelQuestions: any[];
 }
 const matchStateCache = new Map<string, MatchState>();
 
@@ -308,18 +293,11 @@ export function registerDuelHandlers(namespace: Namespace): void {
                 where: { matchId: match_id },
                 orderBy: { roundNumber: 'asc' },
               });
-
-              const soQuestions: SoQuestion[] = dbQuestions.map(
-                (q) => q.questionData as unknown as SoQuestion
-              );
-              const types: QuestionType[] = dbQuestions.map((q) => q.questionType);
-              const pool = await questionService.getQuestionsForDuel(10);
-
-              matchStateCache.set(match_id, { questions: soQuestions, questionTypes: types, pool });
+              matchStateCache.set(match_id, { duelQuestions: dbQuestions });
             }
 
-            const { questions, questionTypes, pool } = matchStateCache.get(match_id)!;
-            await broadcastQuestion(namespace, match_id, 1, questions, questionTypes, pool);
+            const { duelQuestions } = matchStateCache.get(match_id)!;
+            await broadcastQuestion(namespace, match_id, 1, duelQuestions);
           }
         }
       } catch (err) {
@@ -353,7 +331,7 @@ export function registerDuelHandlers(namespace: Namespace): void {
             await broadcastRoundResult(
               namespace, matchId, round_number,
               duelQ.correctAnswer,
-              state.pool, state.questions, state.questionTypes,
+              state.duelQuestions,
             );
           }
         }

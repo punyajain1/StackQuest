@@ -1,7 +1,7 @@
 // StackQuest answer evaluation engine — mirrors backend validation schema.
 // Three question types: mcq | fill_in_blank | string_answer.
 
-export type QuestionType = "mcq" | "fill_in_blank" | "string_answer";
+export type QuestionType = "mcq" | "fill_in_blank" | "string_answer" | "true_false" | "scenario" | "code_output";
 
 export interface Question {
   id: string;
@@ -66,11 +66,11 @@ export interface EvaluationResult {
 
 export function evaluateAnswer(q: Question, submission: string): EvaluationResult {
   const sub = (submission ?? "").trim();
-  if (q.type === "mcq") {
+  if (q.type === "mcq" || q.type === "true_false") {
     const ok = norm(sub) === norm(q.answer);
     return { correct: ok, score: ok ? 1 : 0, reason: ok ? "exact match" : "wrong option" };
   }
-  if (q.type === "fill_in_blank") {
+  if (q.type === "fill_in_blank" || q.type === "code_output") {
     if (!sub) return { correct: false, score: 0, reason: "empty" };
     if (norm(sub) === norm(q.answer)) return { correct: true, score: 1, reason: "exact" };
     if (norm(q.answer).includes(norm(sub)) || norm(sub).includes(norm(q.answer)))

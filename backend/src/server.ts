@@ -5,7 +5,7 @@ import { logger } from './utils/logger';
 import { httpServer, io } from './socket/socket.server';
 import { registerDuelHandlers } from './socket/duel.socket';
 import { registerDailyHandlers } from './socket/daily.socket';
-import { startQuestionFetcher } from './jobs/questionFetcher';
+import { startKnowledgeCardPipeline } from './jobs/knowledgeCardPipeline';
 import { achievementService } from './services/achievement.service';
 
 async function bootstrap(): Promise<void> {
@@ -36,7 +36,7 @@ async function bootstrap(): Promise<void> {
   });
 
   // 5. Start background question pool refresher
-  startQuestionFetcher();
+  startKnowledgeCardPipeline();
 
   // ─── Graceful shutdown ─────────────────────────────────────────────────────
   const shutdown = async (signal: string): Promise<void> => {

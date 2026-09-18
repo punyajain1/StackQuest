@@ -20,16 +20,14 @@ export const Route = createFileRoute("/game/daily")({
 interface DailyQuestion {
   question_number: number;
   total: number;
-  question_type: "mcq" | "fill_in_blank" | "string_answer";
+  question_type: "mcq" | "true_false" | "fill_blank" | "scenario" | "code_output";
   question_text: string;
   options?: string[];
-  blank_text?: string;
-  hint?: string;
   time_limit: number;
-  question_id: number;
-  title: string;
-  tags: string[];
-  score: number;
+  knowledge_card_id: string;
+  topic: string;
+  concept: string;
+  difficulty: string;
 }
 
 interface QuestionVerdict {
@@ -95,7 +93,8 @@ function DailyChallengePage() {
   // 1. Session initialization check on mount
   useEffect(() => {
     if (!token) return;
-    
+    let activeSocket: any = null;
+
     const checkAttempt = async () => {
       try {
         const res = await fetch("http://localhost:3000/api/game/daily/start", {
@@ -105,11 +104,11 @@ function DailyChallengePage() {
             Authorization: `Bearer ${token}`,
           },
         });
-        const json = await res.json();
+        const data = await res.json();
         
-        if (json.success) {
+        if (data.success && !data.data.already_played) {
           // Allowed to play today, initialize WebSocket connection
-          initializeSocket();
+          activeSocket = initializeSocket();
         } else {
           // Already played today or error
           setAlreadyPlayed(true);
@@ -124,7 +123,11 @@ function DailyChallengePage() {
 
     checkAttempt();
     return () => {
-      if (socket) socket.disconnect();
+      if (activeSocket) {
+        activeSocket.disconnect();
+      } else if (socket) {
+        socket.disconnect();
+      }
     };
   }, [token]);
 
@@ -172,6 +175,7 @@ function DailyChallengePage() {
     });
 
     setSocket(sk);
+    return sk;
   };
 
   const submitAnswer = (pick?: string) => {
@@ -346,10 +350,10 @@ function DailyChallengePage() {
                   className="space-y-6"
                 >
                   <Panel
-                    title={`daily.${question.question_id}`}
+                    title={`daily.${question.question_number}`}
                     header={
                       <span className="border border-accent text-accent px-2 py-0.5 text-[9px] uppercase tracking-widest">
-                        {question.question_type === "mcq" ? "MULTIPLE CHOICE" : question.question_type === "fill_in_blank" ? "FILL IN BLANK" : "FREE RESPONSE"}
+                        {question.question_type.replace('_', ' ').toUpperCase()}
                       </span>
                     }
                   >
@@ -361,9 +365,9 @@ function DailyChallengePage() {
 
                     {/* Inputs */}
                     <div className="border-t border-hairline bg-background/40 p-6">
-                      {question.question_type === "mcq" && question.options ? (
+                      {question.question_type === "mcq" || question.question_type === "true_false" ? (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {question.options.map((o, i) => {
+                          {question.options?.map((o, i) => {
                             const letter = String.fromCharCode(65 + i);
                             const isPick = (verdict ? submission : submission) === o;
                             const isCorrect = verdict?.correct_answer === o;
@@ -398,7 +402,7 @@ function DailyChallengePage() {
                               <Terminal className="h-3.5 w-3.5" /> console · write code
                             </div>
                             
-                            {question.question_type === "string_answer" ? (
+                            {question.question_type === "scenario" || question.question_type === "code_output" ? (
                               <textarea
                                 value={submission}
                                 onChange={(e) => setSubmission(e.target.value)}
@@ -472,12 +476,7 @@ function DailyChallengePage() {
                           )}
                         </div>
 
-                        {question.hint && (
-                          <div className="text-xs text-muted-foreground p-4 border border-dashed border-border rounded-sm">
-                            <span className="text-accent">// stackoverflow_context:</span>
-                            <div className="mt-1 leading-relaxed">{question.hint}</div>
-                          </div>
-                        )}
+                        {/* (stackoverflow context hint removed from backend) */}
                       </motion.div>
                     )}
                   </AnimatePresence>

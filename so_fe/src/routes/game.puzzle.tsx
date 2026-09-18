@@ -25,29 +25,12 @@ interface SessionSnapshot {
 }
 
 interface QuestionDetails {
-  question_type: "mcq" | "fill_in_blank" | "string_answer";
-  question_text: string;
-  options: string[];
-  blank_text?: string;
-  hint?: string;
-  time_limit: number;
-  question: {
-    question_id: number;
-    title: string;
-    body: string;
-    body_markdown: string;
-    tags: string[];
-    score: number;
-    answer_count?: number;
-    accepted_answer_id?: number | null;
-    top_answer_body?: string | null;
-    top_answer_score?: number | null;
-    top_answer_author?: string | null;
-    view_count?: number;
-    difficulty?: string;
-    is_answered?: boolean;
-    creation_date?: number;
-  };
+  id: string;
+  type: "mcq" | "true_false" | "fill_blank" | "scenario" | "code_output";
+  question: string;
+  options?: string[];
+  explanation?: string;
+  knowledgeCardId: string;
 }
 
 interface EvaluationResult {
@@ -149,12 +132,10 @@ function PuzzleGameplayPage() {
         },
         body: JSON.stringify({
           session_id: session.session_id,
-          question_id: question.question.question_id,
-          question_type: question.question_type,
-          player_choice: question.question_type === "mcq" ? answer : undefined,
-          player_answer: question.question_type !== "mcq" ? answer : undefined,
+          knowledge_card_id: question.knowledgeCardId,
+          question_id: question.id,
+          player_answer: answer,
           time_taken_ms: timeTakenMs,
-          question_snapshot: question.question,
         }),
       });
 
@@ -307,10 +288,10 @@ function PuzzleGameplayPage() {
               className="space-y-6"
             >
               <Panel
-                title={`puzzle.${question.question.question_id}`}
+                title={`puzzle.${question.id}`}
                 header={
                   <span className="border border-accent text-accent px-2 py-0.5 text-[9px] uppercase tracking-widest font-mono">
-                    {question.question_type === "mcq" ? "MULTIPLE CHOICE" : question.question_type === "fill_in_blank" ? "FILL IN BLANK" : "FREE RESPONSE"}
+                    {question.type.replace('_', ' ').toUpperCase()}
                   </span>
                 }
               >
@@ -318,25 +299,18 @@ function PuzzleGameplayPage() {
                   
                   {/* Prompt */}
                   <div className="text-sm leading-relaxed whitespace-pre-line text-foreground/90">
-                    {question.question_text}
+                    {question.question}
                   </div>
-
-                  {/* Optional pre-formatted Code Blocks */}
-                  {getCleanCode(question.question.top_answer_body || undefined) && question.question_type === "string_answer" && (
-                    <pre className="mt-5 p-4 bg-background border border-hairline rounded-sm text-[13px] leading-relaxed text-foreground overflow-x-auto select-all">
-                      <code>{stripHtml(question.question.top_answer_body || "")}</code>
-                    </pre>
-                  )}
 
                 </div>
 
                 {/* Input Panel */}
                 <div className="border-t border-hairline bg-background/40 p-6">
-                  {question.question_type === "mcq" ? (
+                  {question.type === "mcq" || question.type === "true_false" ? (
                     
                     /* MCQ Choices Grid */
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {question.options.map((o, i) => {
+                      {question.options?.map((o, i) => {
                         const letter = String.fromCharCode(65 + i);
                         const isSelected = submission === o;
                         const isCorrect = verdict?.correctAnswer === o;
@@ -374,7 +348,7 @@ function PuzzleGameplayPage() {
                           <Terminal className="h-3.5 w-3.5" /> console · write code · press enter
                         </div>
 
-                        {question.question_type === "string_answer" ? (
+                        {question.type === "scenario" || question.type === "code_output" ? (
                           <textarea
                             value={submission}
                             onChange={(e) => setSubmission(e.target.value)}
@@ -451,11 +425,11 @@ function PuzzleGameplayPage() {
                       )}
                     </div>
 
-                    {/* Explanatory StackOverflow context */}
-                    {question.hint && (
+                    {/* Explanatory context */}
+                    {question.explanation && (
                       <div className="text-xs text-muted-foreground font-mono p-4 border border-dashed border-border rounded-sm">
-                        <span className="text-accent">// stackoverflow_context:</span>
-                        <div className="mt-1 leading-relaxed">{question.hint}</div>
+                        <span className="text-accent">// explanation:</span>
+                        <div className="mt-1 leading-relaxed">{question.explanation}</div>
                       </div>
                     )}
 

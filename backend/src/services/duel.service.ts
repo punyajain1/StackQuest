@@ -1,47 +1,33 @@
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../config/prisma';
 import { questionService } from './question.service';
-import { evaluateAnswer, calculateElo } from '../utils/stackquest.algorithm';
+import { calculateElo } from '../utils/stackquest.algorithm';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
 import { env } from '../config/env';
 import type {
-  QuestionType, SoQuestion, DuelState, DuelPlayerInfo,
+  DuelState, DuelPlayerInfo,
   DuelQuestionPayload, DuelResult, DuelPlayerResult,
 } from '../models/db.types';
-import { formatQuestion } from '../utils/questionFormatter';
+import type { KnowledgeCard } from '../../generated/prisma';
 
-const QUESTION_TYPES: QuestionType[] = ['mcq'/*, 'fill_in_blank', 'string_answer'*/];
-
-function pickQuestionType(): QuestionType {
-  return QUESTION_TYPES[Math.floor(Math.random() * QUESTION_TYPES.length)];
-}
-
-function generateCorrectAnswer(question: SoQuestion, qType: QuestionType): string {
-  switch (qType) {
-    case 'mcq': return question.tags[0] ?? 'unknown';
-    case 'fill_in_blank': return question.tags[0] ?? question.title.split(' ').find((w) => w.length > 3) ?? 'code';
-    case 'string_answer': return question.top_answer_body ?? question.body_markdown;
-  }
-}
-
-function generateOptions(question: SoQuestion, allQuestions: SoQuestion[]): string[] {
-  const correct = question.tags[0] ?? 'unknown';
-  const distractors = new Set<string>();
-  for (const q of allQuestions) {
-    for (const t of q.tags) {
-      if (t !== correct) distractors.add(t);
-      if (distractors.size >= 3) break;
-    }
-    if (distractors.size >= 3) break;
-  }
-  return [correct, ...Array.from(distractors).slice(0, 3)].sort(() => Math.random() - 0.5);
+function pickRandomQuestion(card: KnowledgeCard): any {
+  const qObj: any = card.questions;
+  const all = [
+    ...(qObj.mcqs || []),
+    ...(qObj.trueFalse || []),
+    ...(qObj.fillBlanks || []),
+    ...(qObj.scenarios || []),
+    ...(qObj.codeQuestions || [])
+  ];
+  if (all.length === 0) return null;
+  return all[Math.floor(Math.random() * all.length)];
 }
 
 export class DuelService {
   async createDuel(userId: string, tag?: string, opponentId?: string): Promise<DuelState> {
     const rounds = env.DUEL_ROUNDS;
-    const questions = await questionService.getQuestionsForDuel(rounds);
+    const cards = await questionService.getQuestionsForDuel(rounds);
 
     const match = await prisma.duelMatch.create({
       data: {
@@ -54,19 +40,23 @@ export class DuelService {
       include: { player1: { select: { id: true, username: true, avatarUrl: true, elo: true } } },
     });
 
-    // Pre-generate duel questions in a single batch insert
-    const duelQuestionData = questions.map((question, i) => {
-      const qType = pickQuestionType();
-      const correctAnswer = generateCorrectAnswer(question, qType);
-      const options = qType === 'mcq' ? generateOptions(question, questions) : null;
+    const duelQuestionData = cards.map((card, i) => {
+      const q = pickRandomQuestion(card);
+      if (!q) throw new Error('Knowledge card missing questions');
+
+      // Map strict LLM question format to DB format
+      let qType = 'mcq';
+      if (q.type === 'true_false') qType = 'string_answer'; // We can adapt true/false as string "true" or "false"
+      if (q.type === 'fill_blank') qType = 'fill_in_blank';
+
       return {
         matchId: match.id,
         roundNumber: i + 1,
-        soQuestionId: question.question_id,
-        questionType: qType,
-        questionData: JSON.parse(JSON.stringify(question)),
-        correctAnswer,
-        options: options ? options : undefined,
+        knowledgeCardId: card.id,
+        questionType: qType as any,
+        questionData: q,
+        correctAnswer: q.correctAnswer?.toString() ?? q.answer?.toString() ?? '',
+        options: q.options ? q.options : undefined,
       };
     });
 
@@ -148,57 +138,41 @@ export class DuelService {
     });
     if (!duelQ) throw AppError.notFound('Round not found');
 
-    // Check if already answered
     if (isPlayer1 && duelQ.player1Answer !== null) throw AppError.badRequest('Already answered this round');
     if (isPlayer2 && duelQ.player2Answer !== null) throw AppError.badRequest('Already answered this round');
 
-    // Evaluate
+    // Simple deterministic evaluation since correct answers are predefined
+    // If it's an MCQ, the answer is the index string (e.g. "0"). If fill_blank, exact match lowercase.
     let correct = false;
     let feedback: string | undefined;
 
-    let evalCorrectAnswer = duelQ.correctAnswer;
-    let evalQuestionType: any = duelQ.questionType;
+    const qData: any = duelQ.questionData;
+    const type = qData.type;
 
-    if (duelQ.questionType === 'mcq') {
-      const typesByRound = ['mcq', 'cloze', 'true_false', 'answer_mcq', 'mcq'];
-      const rotatedType = typesByRound[roundNumber % typesByRound.length];
-      if (rotatedType && rotatedType !== 'mcq') {
-        const formatted = formatQuestion(duelQ.questionData as any, rotatedType as any);
-        evalCorrectAnswer = formatted.correct_answer;
-        evalQuestionType = rotatedType;
+    if (type === 'mcq' || type === 'scenario' || type === 'code_output') {
+      const correctIndex = parseInt(duelQ.correctAnswer.toString(), 10);
+      let expectedText = duelQ.correctAnswer.toString();
+      
+      if (!isNaN(correctIndex) && Array.isArray(qData.options) && qData.options[correctIndex] !== undefined) {
+        expectedText = qData.options[correctIndex].toString();
       }
+      
+      correct = answer.trim() === expectedText.trim();
+    } else if (type === 'true_false') {
+      correct = answer.trim().toLowerCase() === duelQ.correctAnswer.toString().toLowerCase();
+    } else if (type === 'fill_blank') {
+      const accepted = qData.acceptedAnswers?.map((a: string) => a.toLowerCase().trim()) || [qData.answer?.toLowerCase().trim()];
+      correct = accepted.includes(answer.toLowerCase().trim());
     }
 
-    switch (evalQuestionType) {
-      case 'cloze':
-      case 'answer_mcq':
-      case 'true_false':
-      case 'mcq': {
-        const result = evaluateAnswer('mcq', answer, evalCorrectAnswer);
-        correct = result.isCorrect;
-        feedback = result.details;
-        break;
-      }
-      case 'fill_in_blank': {
-        const result = evaluateAnswer('fill_in_the_blank', answer, evalCorrectAnswer);
-        correct = result.isCorrect;
-        feedback = result.details;
-        break;
-      }
-      case 'string_answer': {
-        const result = evaluateAnswer('string_answer', answer, evalCorrectAnswer);
-        correct = result.isCorrect;
-        feedback = result.details;
-        break;
-      }
+    if (!correct) {
+      feedback = qData.explanation;
     }
 
-    // Save answer
     const updateData = isPlayer1
       ? { player1Answer: answer, player1Correct: correct, player1TimeMs: timeMs }
       : { player2Answer: answer, player2Correct: correct, player2TimeMs: timeMs };
 
-    // Save answer + update score atomically
     const scoreField = isPlayer1 ? 'player1Score' : 'player2Score';
 
     const [updatedDuelQ] = await prisma.$transaction([
@@ -213,7 +187,6 @@ export class DuelService {
         : []),
     ]);
 
-    // Check if duel is complete (only on the final round)
     if (roundNumber === match.rounds) {
       await this.checkDuelCompletion(matchId);
     }
@@ -245,7 +218,7 @@ export class DuelService {
 
     const questions: DuelQuestionPayload[] = match.questions.map((q) => ({
       round_number: q.roundNumber,
-      question: q.questionData as unknown as SoQuestion,
+      question: q.questionData as any,
       question_type: q.questionType,
       options: q.options as string[] | undefined,
       time_limit: env.DUEL_TIME_LIMIT_SECS,
@@ -293,8 +266,6 @@ export class DuelService {
     return { match_id: match.id, winner_id: match.winnerId, player1: p1, player2: p2 };
   }
 
-
-  /** Called by socket handler after all rounds are answered. */
   async completeDuel(matchId: string): Promise<void> {
     return this.checkDuelCompletion(matchId);
   }
@@ -329,7 +300,6 @@ export class DuelService {
 
     let eloChange1 = 0;
     if (winnerId === null) {
-      // Draw: manually compute with 0.5 actual score since the algorithm only supports win/loss
       const expected1 = 1 / (1 + Math.pow(10, (p2Elo - p1Elo) / 400));
       eloChange1 = Math.round(32 * (0.5 - expected1));
     } else {
@@ -339,7 +309,6 @@ export class DuelService {
     
     const eloChange2 = -eloChange1;
 
-    // Pre-calculate new win rates in memory to avoid post-transaction updates
     const newTotal1 = (p1?.totalDuels ?? 0) + 1;
     const newWon1 = (p1?.duelsWon ?? 0) + (winnerId === match.player1Id ? 1 : 0);
     const newWinRate1 = newTotal1 > 0 ? newWon1 / newTotal1 : 0;
@@ -353,9 +322,7 @@ export class DuelService {
       newWinRate2 = newTotal2 > 0 ? newWon2 / newTotal2 : 0;
     }
 
-    // Single atomic transaction for match completion + ELO settlement
     await prisma.$transaction([
-      // 1. Close the match
       prisma.duelMatch.update({
         where: { id: matchId },
         data: {
@@ -363,8 +330,6 @@ export class DuelService {
           player1Elo: eloChange1, player2Elo: eloChange2,
         },
       }),
-
-      // 2. Update Player 1
       prisma.user.update({
         where: { id: match.player1Id },
         data: {
@@ -374,8 +339,6 @@ export class DuelService {
           winRate: newWinRate1,
         },
       }),
-
-      // 3. Update Player 2 (if exists)
       ...(match.player2Id
         ? [
             prisma.user.update({
@@ -396,4 +359,3 @@ export class DuelService {
 }
 
 export const duelService = new DuelService();
-

@@ -213,28 +213,24 @@ export const useDuel = create<DuelState>((set, get) => {
       });
 
       // Match question publisher
-      socket.off("duel:question");
       socket.on("duel:question", (data: {
         round_number: number;
         total_rounds: number;
-        question_type: "mcq" | "fill_in_blank" | "string_answer";
+        question_type: "mcq" | "true_false" | "fill_blank" | "scenario" | "code_output";
         question_text: string;
-        question: { question_id: number; title: string; tags: string[] };
         options?: string[];
-        blank_text?: string;
-        hint?: string;
         time_limit: number;
       }) => {
         console.log("🎮 Question loaded for round", data.round_number);
         
         // Map backend question payload to standard frontend Question shape
         const mappedQuestion: Question = {
-          id: String(data.question.question_id),
-          type: data.question_type === "mcq" ? "mcq" : data.question_type === "fill_in_blank" ? "fill_in_blank" : "string_answer",
-          prompt: data.question_text || data.question.title,
+          id: String(data.round_number),
+          type: data.question_type === "fill_blank" ? "fill_in_blank" : data.question_type,
+          prompt: data.question_text,
           options: data.options || [],
           answer: "", // answer hidden during round to prevent cheating
-          explanation: data.hint || "",
+          explanation: "",
         };
 
         const currentQuestions = [...get().questions];

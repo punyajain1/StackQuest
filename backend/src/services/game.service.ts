@@ -3,24 +3,11 @@ import { prisma } from '../config/prisma';
 import { questionService } from './question.service';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
-import { env } from '../config/env';
-import { formatQuestion } from '../utils/questionFormatter';
-import { evaluateAnswer, calculateQuestionScore, calculateAnswerXP, calculateXPProgression, getSessionStartXP, getStreakMultiplier } from '../utils/stackquest.algorithm';
-import type { GameSession } from '../../generated/prisma';
+import { calculateQuestionScore, calculateAnswerXP, calculateXPProgression, getSessionStartXP, getStreakMultiplier } from '../utils/stackquest.algorithm';
+import type { GameSession, KnowledgeCard } from '../../generated/prisma';
 import type {
-  GameMode, Difficulty, QuestionType, SoQuestion,
-  GameQuestion, SessionSnapshot,
+  GameMode, Difficulty, SessionSnapshot,
 } from '../models/db.types';
-
-// ─── Question type cycle ─────────────────────────────────────
-
-const QUESTION_TYPES: QuestionType[] = ['mcq'/*, 'fill_in_blank', 'string_answer'*/];
-
-function pickQuestionType(): QuestionType {
-  return QUESTION_TYPES[Math.floor(Math.random() * QUESTION_TYPES.length)];
-}
-
-// ─── In-memory active session state ─────────────────────────
 
 interface ActiveSession {
   session_id: string;
@@ -33,27 +20,31 @@ interface ActiveSession {
   questions_answered: number;
   correct_count: number;
   xp_earned: number;
-  played_ids: number[];
+  played_ids: string[];
   started_at: number;
-  preloaded_questions: SoQuestion[];
+  preloaded_questions: KnowledgeCard[];
 }
 
 const activeSessions = new Map<string, ActiveSession>();
 
-// ─── Game Service ────────────────────────────────────────────
+function pickRandomQuestion(card: KnowledgeCard): any {
+  const qObj: any = card.questions;
+  const all = [
+    ...(qObj.mcqs || []),
+    ...(qObj.trueFalse || []),
+    ...(qObj.fillBlanks || []),
+    ...(qObj.scenarios || []),
+    ...(qObj.codeQuestions || [])
+  ];
+  if (all.length === 0) return null;
+  return all[Math.floor(Math.random() * all.length)];
+}
 
 export class GameService {
-  // ─── Daily Challenge ─────────────────────────────────────
-
   async startDailyChallenge(userId: string): Promise<SessionSnapshot> {
-    // Check if user already played today
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
-    const existing = await prisma.gameSession.findFirst({
-      where: { userId, mode: 'daily_challenge', dailyDate: today },
-    });
-    // if (existing) throw AppError.conflict('You already played today\'s daily challenge', 'DAILY_ALREADY_PLAYED');
-
+    
     const questions = await questionService.getDailyChallenge();
     const sessionId = uuidv4();
 
@@ -73,8 +64,6 @@ export class GameService {
     return this.buildSnapshot(state);
   }
 
-  // ─── Puzzle ──────────────────────────────────────────────
-
   async startPuzzle(userId: string, tag: string | null, difficulty: Difficulty | null): Promise<SessionSnapshot> {
     const sessionId = uuidv4();
     const state: ActiveSession = {
@@ -93,116 +82,105 @@ export class GameService {
     return this.buildSnapshot(state);
   }
 
-  // ─── Get Next Question ────────────────────────────────────
-
-  async getNextQuestion(sessionId: string, difficulty?: Difficulty, questionType?: string): Promise<GameQuestion> {
+  async getNextQuestion(sessionId: string, difficulty?: Difficulty): Promise<any> {
     const session = this.getActiveSession(sessionId);
-    let question: SoQuestion;
+    let card: KnowledgeCard;
 
     if (session.mode === 'daily_challenge' && session.preloaded_questions.length > 0) {
       const idx = session.questions_answered;
       if (idx >= session.preloaded_questions.length) {
         throw AppError.badRequest('No more questions in this daily challenge');
       }
-      question = session.preloaded_questions[idx];
+      card = session.preloaded_questions[idx];
     } else {
-      question = await questionService.getNextQuestion({
-        tag: session.tag, difficulty, excludeIds: session.played_ids, requireAnswer: true,
+      card = await questionService.getNextQuestion({
+        tag: session.tag, difficulty, excludeIds: session.played_ids,
       });
     }
 
-    let qType = (questionType as QuestionType) || pickQuestionType();
-    if (qType === 'mcq') {
-      const mcqVariants = ['mcq', 'cloze', 'true_false', 'answer_mcq'];
-      qType = mcqVariants[Math.floor(Math.random() * mcqVariants.length)] as any;
-    }
-    return this.buildGameQuestion(question, qType, session.preloaded_questions);
-  }
+    const q = pickRandomQuestion(card);
+    if (!q) throw AppError.internal('Knowledge card missing questions');
 
-  private buildGameQuestion(
-    question: SoQuestion, qType: any, allQuestions: SoQuestion[]
-  ): GameQuestion {
-    return formatQuestion(question, qType, allQuestions);
-  }
+    // Remove the correct answer from the payload sent to the client
+    const clientQ = { ...q, knowledgeCardId: card.id };
+    delete clientQ.correctAnswer;
+    delete clientQ.answer;
 
-  // ─── Evaluate Answer ─────────────────────────────────────
+    return clientQ;
+  }
 
   async evaluateAnswer(opts: {
-    sessionId: string; questionId: number; questionType: any;
-    playerAnswer?: string; playerChoice?: string; timeTakenMs: number;
-    question: SoQuestion;
+    sessionId: string; knowledgeCardId: string;
+    playerAnswer?: string; timeTakenMs: number;
+    questionId: string; // The nested sub-question ID like "mcq_1"
   }): Promise<{
     correct: boolean; scoreEarned: number; xpEarned: number;
     feedback?: string; correctAnswer: string; snapshot: SessionSnapshot;
   }> {
-    const { sessionId, questionId, questionType, playerAnswer, playerChoice, timeTakenMs, question } = opts;
+    const { sessionId, knowledgeCardId, playerAnswer = '', timeTakenMs, questionId } = opts;
     const session = this.getActiveSession(sessionId);
 
-    if (session.played_ids.includes(questionId)) {
+    if (session.played_ids.includes(knowledgeCardId)) {
       throw AppError.badRequest('Question already answered in this session');
     }
 
+    const card = await prisma.knowledgeCard.findUnique({ where: { id: knowledgeCardId } });
+    if (!card) throw AppError.notFound('Knowledge card not found');
+
+    const qObj: any = card.questions;
+    const all = [
+      ...(qObj.mcqs || []),
+      ...(qObj.trueFalse || []),
+      ...(qObj.fillBlanks || []),
+      ...(qObj.scenarios || []),
+      ...(qObj.codeQuestions || [])
+    ];
+    
+    const subQ = all.find(q => q.id === questionId);
+    if (!subQ) throw AppError.notFound('Specific sub-question not found in card');
+
     let correct = false;
-    let scoreEarned = 0;
-    let xpEarned = 0;
-    let feedback: string | undefined;
-    let correctAnswer = '';
+    let feedback: string | undefined = subQ.explanation;
+    let correctAnswer = subQ.correctAnswer?.toString() ?? subQ.answer?.toString() ?? '';
+    const type = subQ.type;
 
-    let evalResult;
-    const isCustomMCQ = ['cloze', 'answer_mcq', 'true_false'].includes(questionType);
-    const qTypeAlg = isCustomMCQ
-      ? 'mcq'
-      : (questionType === 'fill_in_blank' ? 'fill_in_the_blank' : questionType);
-
-    switch (questionType) {
-      case 'cloze':
-      case 'answer_mcq':
-      case 'true_false':
-      case 'mcq': {
-        if (!playerChoice) throw AppError.badRequest('playerChoice required for MCQ/Cloze/TF');
-        const formatted = formatQuestion(question, questionType, []);
-        correctAnswer = formatted.correct_answer;
-        evalResult = evaluateAnswer('mcq', playerChoice, formatted.correct_answer);
-        break;
+    if (type === 'mcq' || type === 'scenario' || type === 'code_output') {
+      const correctIndex = parseInt(subQ.correctAnswer?.toString() ?? '', 10);
+      let expectedText = subQ.correctAnswer?.toString() ?? '';
+      
+      if (!isNaN(correctIndex) && Array.isArray(subQ.options) && subQ.options[correctIndex] !== undefined) {
+        expectedText = subQ.options[correctIndex].toString();
       }
-      case 'fill_in_blank': {
-        if (!playerAnswer) throw AppError.badRequest('playerAnswer required for fill_in_blank');
-        const formatted = formatQuestion(question, 'fill_in_blank', []);
-        correctAnswer = formatted.correct_answer;
-        evalResult = evaluateAnswer('fill_in_the_blank', playerAnswer, formatted.correct_answer);
-        break;
-      }
-      case 'string_answer': {
-        if (!playerAnswer) throw AppError.badRequest('playerAnswer required for string_answer');
-        const formatted = formatQuestion(question, 'string_answer', []);
-        correctAnswer = formatted.correct_answer;
-        evalResult = evaluateAnswer('string_answer', playerAnswer, formatted.correct_answer);
-        break;
-      }
+      
+      correct = playerAnswer.trim() === expectedText.trim();
+    } else if (type === 'true_false') {
+      correct = playerAnswer.trim().toLowerCase() === subQ.correctAnswer.toString().toLowerCase();
+    } else if (type === 'fill_blank') {
+      const accepted = subQ.acceptedAnswers?.map((a: string) => a.toLowerCase().trim()) || [subQ.answer?.toLowerCase().trim()];
+      correct = accepted.includes(playerAnswer.toLowerCase().trim());
+      correctAnswer = accepted[0] || correctAnswer;
     }
 
-    if (!evalResult) throw AppError.internal('Failed to evaluate answer');
-
-    correct = evalResult.isCorrect;
-    feedback = evalResult.details;
+    let qTypeAlg = 'mcq';
+    if (type === 'fill_blank') qTypeAlg = 'fill_in_the_blank';
 
     const scoreResult = calculateQuestionScore(
-      qTypeAlg,
+      qTypeAlg as any,
       correct,
       timeTakenMs,
       session.streak,
-      evalResult.similarityRatio
+      correct ? 1.0 : 0.0
     );
-    scoreEarned = scoreResult.totalScore;
+    const scoreEarned = scoreResult.totalScore;
     
-    xpEarned = calculateAnswerXP(
-      qTypeAlg,
+    const xpEarned = calculateAnswerXP(
+      qTypeAlg as any,
       correct,
-      evalResult.similarityRatio
+      correct ? 1.0 : 0.0
     );
 
     // Update in-memory state
-    session.played_ids.push(questionId);
+    session.played_ids.push(knowledgeCardId);
     session.questions_answered++;
     session.score += scoreEarned;
     session.xp_earned += xpEarned;
@@ -211,16 +189,21 @@ export class GameService {
       session.correct_count++;
       session.streak++;
       if (session.streak > session.streak_peak) session.streak_peak = session.streak;
+      feedback = undefined; // Hide explanation if correct, or keep it depending on UX design.
     } else {
       session.streak = 0;
     }
 
-    // Persist individual answer
+    // Adapt type for DB
+    let dbType = 'mcq';
+    if (type === 'true_false') dbType = 'string_answer';
+    if (type === 'fill_blank') dbType = 'fill_in_blank';
+
     await prisma.questionAnswer.create({
       data: {
-        sessionId, soQuestionId: questionId,
-        questionType: isCustomMCQ ? 'mcq' : questionType,
-        playerAnswer: playerAnswer ?? null, playerChoice: playerChoice ?? null,
+        sessionId, knowledgeCardId,
+        questionType: dbType as any,
+        playerAnswer,
         correct, scoreEarned, xpEarned, timeTakenMs,
       },
     });
@@ -228,15 +211,12 @@ export class GameService {
     return { correct, scoreEarned, xpEarned, feedback, correctAnswer, snapshot: this.buildSnapshot(session) };
   }
 
-  // ─── End Session ─────────────────────────────────────────
-
   async endSession(sessionId: string): Promise<GameSession> {
     const session = this.getActiveSession(sessionId);
     const durationSecs = Math.round((Date.now() - session.started_at) / 1000);
     const accuracy = session.questions_answered > 0
       ? session.correct_count / session.questions_answered : 0;
 
-    // Fetch user data BEFORE the transaction (pure read)
     const currentUser = await prisma.user.findUnique({
       where: { id: session.user_id },
       select: { xp: true, maxStreak: true, username: true },
@@ -248,7 +228,6 @@ export class GameService {
     const newMaxStreak = Math.max(currentUser?.maxStreak ?? 0, session.streak_peak);
     const periodWeek = this.getISOWeek(new Date());
 
-    // Atomic transaction — all 3 writes succeed or none do
     const [finalSession] = await prisma.$transaction([
       prisma.gameSession.update({
         where: { id: sessionId },
@@ -279,8 +258,6 @@ export class GameService {
     logger.info({ sessionId, score: session.score }, 'Game session ended');
     return finalSession;
   }
-
-  // ─── Helpers ─────────────────────────────────────────────
 
   private getActiveSession(sessionId: string): ActiveSession {
     const session = activeSessions.get(sessionId);

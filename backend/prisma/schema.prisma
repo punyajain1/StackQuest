@@ -164,7 +164,7 @@ model DuelQuestion {
   id             String       @id @default(uuid()) @db.Uuid
   matchId        String       @map("match_id") @db.Uuid
   roundNumber    Int          @map("round_number")
-  soQuestionId   Int          @map("so_question_id")
+  knowledgeCardId String       @map("knowledge_card_id") @db.Uuid
   questionType   QuestionType @map("question_type")
   questionData   Json         @map("question_data")
   correctAnswer  String       @map("correct_answer")
@@ -212,7 +212,7 @@ model GameSession {
 model QuestionAnswer {
   id              String       @id @default(uuid()) @db.Uuid
   sessionId       String       @map("session_id") @db.Uuid
-  soQuestionId    Int          @map("so_question_id")
+  knowledgeCardId String       @map("knowledge_card_id") @db.Uuid
   questionType    QuestionType @map("question_type")
   playerAnswer    String?      @map("player_answer")
   playerChoice    String?      @map("player_choice")
@@ -228,30 +228,21 @@ model QuestionAnswer {
   @@map("question_answers")
 }
 
-// ─── SO Question Cache ───────────────────────────────────────
+// ─── Knowledge Card ──────────────────────────────────────────────
 
-model SoQuestionCache {
-  questionId       Int        @id @map("question_id")
-  title            String
-  body             String
-  bodyMarkdown     String     @map("body_markdown")
-  tags             String[]
-  score            Int        @default(0)
-  answerCount      Int        @default(0) @map("answer_count")
-  acceptedAnswerId Int?       @map("accepted_answer_id")
-  topAnswerBody    String?    @map("top_answer_body")
-  topAnswerScore   Int?       @map("top_answer_score")
-  topAnswerAuthor  String?    @map("top_answer_author")
-  viewCount        Int        @default(0) @map("view_count")
-  difficulty       Difficulty @default(medium)
-  isAnswered       Boolean    @default(false) @map("is_answered")
-  creationDate     DateTime   @map("creation_date") @db.Timestamptz
-  lastFetched      DateTime   @default(now()) @map("last_fetched") @db.Timestamptz
-  variants         Json?      // NEW — stores pre-generated MCQ variants
+model KnowledgeCard {
+  id               String     @id @default(uuid()) @db.Uuid
+  sourceQuestionId Int        @unique @map("source_question_id")
+  sourceAnswerId   Int        @map("source_answer_id")
+  topic            String
+  concept          String
+  difficulty       Difficulty
+  summary          String
+  questions        Json
+  generatedAt      DateTime   @default(now()) @map("generated_at") @db.Timestamptz
 
-  @@index([isAnswered, difficulty])
-  @@index([lastFetched])
-  @@map("so_question_cache")
+  @@index([topic, difficulty])
+  @@map("knowledge_cards")
 }
 
 // ─── Leaderboard ─────────────────────────────────────────────
@@ -280,8 +271,8 @@ model LeaderboardEntry {
 
 model DailyChallenge {
   id          String   @id @default(uuid()) @db.Uuid
-  date        DateTime @unique @db.Date
-  questionIds Int[]    @map("question_ids")
+  date           DateTime @unique @db.Date
+  knowledgeCardIds String[] @map("knowledge_card_ids") @db.Uuid
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@map("daily_challenges")

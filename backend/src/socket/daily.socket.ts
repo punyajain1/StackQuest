@@ -4,11 +4,9 @@ import { authService } from '../services/auth.service';
 import { questionService } from '../services/question.service';
 import { gameService } from '../services/game.service';
 import { achievementService } from '../services/achievement.service';
-import { formatQuestion } from '../utils/questionFormatter';
 import { logger } from '../utils/logger';
-import type { UserPayload, SoQuestion, QuestionType, GameQuestion } from '../models/db.types';
-
-// ─── Auth middleware ──────────────────────────────────────────────────────────
+import type { UserPayload } from '../models/db.types';
+import type { KnowledgeCard } from '../../generated/prisma';
 
 function authMiddleware(socket: Socket, next: (err?: Error) => void): void {
   try {
@@ -24,12 +22,10 @@ function authMiddleware(socket: Socket, next: (err?: Error) => void): void {
   }
 }
 
-// ─── Per-user session state (in-memory) ──────────────────────────────────────
-
 interface DailySocketSession {
   session_id: string;
-  questions: SoQuestion[];
-  formatted: GameQuestion[];
+  cards: KnowledgeCard[];
+  flattened_questions: any[];
   question_number: number;
   score: number;
   correct_count: number;
@@ -37,9 +33,7 @@ interface DailySocketSession {
   question_timer?: ReturnType<typeof setInterval>;
 }
 
-const sessions = new Map<string, DailySocketSession>(); // key: socket.id
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const sessions = new Map<string, DailySocketSession>();
 
 function clearQuestionTimer(session: DailySocketSession): void {
   if (session.question_timer) {
@@ -65,7 +59,6 @@ function startQuestionTimer(
 
     if (remaining <= 0) {
       clearQuestionTimer(session);
-      // Auto-submit blank answer on timeout
       handleSubmit(socket, session, '', timeLimit * 1000).catch(
         (err) => logger.error({ err }, 'Daily auto-submit failed'),
       );
@@ -73,35 +66,47 @@ function startQuestionTimer(
   }, 1000);
 }
 
+function pickRandomQuestion(card: KnowledgeCard): any {
+  const qObj: any = card.questions;
+  const all = [
+    ...(qObj.mcqs || []),
+    ...(qObj.trueFalse || []),
+    ...(qObj.fillBlanks || []),
+    ...(qObj.scenarios || []),
+    ...(qObj.codeQuestions || [])
+  ];
+  if (all.length === 0) return null;
+  return all[Math.floor(Math.random() * all.length)];
+}
+
 async function sendQuestion(socket: Socket, session: DailySocketSession): Promise<void> {
   const n = session.question_number;
-  const total = session.questions.length;
+  const total = session.flattened_questions.length;
 
   if (n > total) {
-    // Session complete — end it
     await endSession(socket, session);
     return;
   }
 
-  const formatted = session.formatted[n - 1];
+  const q = session.flattened_questions[n - 1];
+  const card = session.cards[n - 1];
 
   socket.emit(DAILY.QUESTION, {
     question_number: n,
     total,
-    question_type: formatted.question_type,
-    question_text: formatted.question_text,
-    options: formatted.options,
-    blank_text: formatted.blank_text,
-    hint: formatted.hint,
-    time_limit: formatted.time_limit,
-    // Question metadata (no correct_answer exposed)
-    question_id: formatted.question.question_id,
-    title: formatted.question.title,
-    tags: formatted.question.tags,
-    score: formatted.question.score,
+    question_type: q.type,
+    question_text: q.question,
+    options: q.options,
+    time_limit: 30, // Default 30s per question
+    
+    // KnowledgeCard metadata
+    knowledge_card_id: card.id,
+    topic: card.topic,
+    concept: card.concept,
+    difficulty: card.difficulty,
   });
 
-  startQuestionTimer(socket, session, formatted.time_limit);
+  startQuestionTimer(socket, session, 30);
 }
 
 async function handleSubmit(
@@ -113,35 +118,23 @@ async function handleSubmit(
   clearQuestionTimer(session);
 
   const n = session.question_number;
-  if (n > session.questions.length) return;
+  if (n > session.flattened_questions.length) return;
 
-  const formatted = session.formatted[n - 1];
-  const soQ = session.questions[n - 1];
+  const q = session.flattened_questions[n - 1];
+  const card = session.cards[n - 1];
 
   try {
-    // Evaluate using game service
     const result = await gameService.evaluateAnswer({
       sessionId: session.session_id,
-      questionId: soQ.question_id,
-      questionType: formatted.question_type,
-      playerAnswer: formatted.question_type !== 'mcq' ? answer : undefined,
-      playerChoice: formatted.question_type === 'mcq' ? answer : undefined,
+      knowledgeCardId: card.id,
+      questionId: q.id,
+      playerAnswer: answer,
       timeTakenMs: timeMs,
-      question: soQ,
     });
 
     session.score = result.snapshot.score;
     session.correct_count = result.snapshot.correct_count;
     session.xp_earned = result.snapshot.xp_earned;
-
-    // Build user-facing correct answer (clean text)
-    let correctAnswerDisplay = formatted.correct_answer;
-    if (formatted.question_type === 'string_answer') {
-      // Truncate long reference answers for display
-      correctAnswerDisplay = formatted.correct_answer.length > 500
-        ? formatted.correct_answer.slice(0, 500) + '…'
-        : formatted.correct_answer;
-    }
 
     socket.emit(DAILY.RESULT, {
       question_number: n,
@@ -149,11 +142,10 @@ async function handleSubmit(
       score_earned: result.scoreEarned,
       xp_earned: result.xpEarned,
       feedback: result.feedback,
-      correct_answer: correctAnswerDisplay,
+      correct_answer: result.correctAnswer,
       snapshot: result.snapshot,
     });
 
-    // Move to next question after 1.5 s
     session.question_number++;
     setTimeout(() => {
       sendQuestion(socket, session).catch(
@@ -173,7 +165,6 @@ async function endSession(socket: Socket, session: DailySocketSession): Promise<
     const finalSession = await gameService.endSession(session.session_id);
     const userId = (socket as Socket & { user: UserPayload }).user?.id;
 
-    // Award achievements
     if (userId) {
       await achievementService.checkAndAward(userId).catch(() => {});
     }
@@ -193,8 +184,6 @@ async function endSession(socket: Socket, session: DailySocketSession): Promise<
   }
 }
 
-// ─── Handler registration ─────────────────────────────────────────────────────
-
 export function registerDailyHandlers(namespace: Namespace): void {
   namespace.use(authMiddleware);
 
@@ -202,36 +191,27 @@ export function registerDailyHandlers(namespace: Namespace): void {
     const user = (socket as Socket & { user: UserPayload }).user;
     logger.info({ userId: user.id, socketId: socket.id }, '📅 Daily socket connected');
 
-    // ── daily:join ────────────────────────────────────────────────────────────
     socket.on(DAILY.JOIN, async () => {
       try {
-        // Prevent double-join on same socket
         if (sessions.has(socket.id)) {
           const existing = sessions.get(socket.id)!;
           await sendQuestion(socket, existing);
           return;
         }
 
-        // Start a daily challenge session via game service
         const snapshot = await gameService.startDailyChallenge(user.id);
-        const soQuestions = await questionService.getDailyChallenge();
-        const pool = soQuestions; // use same pool for MCQ distractors
-
-        // Pick question types: cycle through all 3 types
-        const types: QuestionType[] = soQuestions.map((_, i) => {
-          const cycle: QuestionType[] = ['mcq'/*, 'fill_in_blank', 'string_answer'*/];
-          return cycle[i % cycle.length];
+        const cards = await questionService.getDailyChallenge();
+        
+        const flattened_questions = cards.map(c => {
+          const q = pickRandomQuestion(c);
+          if (!q) throw new Error(`KnowledgeCard ${c.id} missing questions`);
+          return q;
         });
-
-        // Pre-format all questions
-        const formatted: GameQuestion[] = soQuestions.map((q, i) =>
-          formatQuestion(q, types[i], pool)
-        );
 
         const session: DailySocketSession = {
           session_id: snapshot.session_id,
-          questions: soQuestions,
-          formatted,
+          cards,
+          flattened_questions,
           question_number: 1,
           score: 0,
           correct_count: 0,
@@ -249,7 +229,6 @@ export function registerDailyHandlers(namespace: Namespace): void {
       }
     });
 
-    // ── daily:submit ──────────────────────────────────────────────────────────
     socket.on(DAILY.SUBMIT, async ({ question_number, answer, time_ms }: {
       question_number: number; answer: string; time_ms: number;
     }) => {
@@ -265,7 +244,6 @@ export function registerDailyHandlers(namespace: Namespace): void {
       await handleSubmit(socket, session, answer, time_ms);
     });
 
-    // ── disconnect ────────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       const session = sessions.get(socket.id);
       if (session) {

@@ -25,7 +25,6 @@ export type {
   User,
   GameSession,
   QuestionAnswer,
-  SoQuestionCache,
   LeaderboardEntry as PrismaLeaderboardEntry,
   DailyChallenge,
   Friendship,
@@ -36,26 +35,6 @@ export type {
 } from '../../generated/prisma';
 
 // ─── Stack Overflow API shapes ───────────────────────────────
-
-export interface SoQuestion {
-  question_id: number;
-  title: string;
-  body: string;             // HTML — strip before display
-  body_markdown: string;    // Raw markdown (from custom SO filter)
-  tags: string[];
-  score: number;
-  answer_count: number;
-  accepted_answer_id: number | null;
-  top_answer_body: string | null;   // HTML — strip before display
-  top_answer_score: number | null;
-  top_answer_author: string | null;
-  view_count: number;
-  difficulty: Difficulty;
-  is_answered: boolean;
-  creation_date: number;    // Unix timestamp
-  owner_display_name?: string;
-  variants?: any;
-}
 
 export interface SoAnswer {
   answer_id: number;
@@ -80,19 +59,6 @@ export interface EvaluationResult {
 }
 
 // ─── Game logic types ────────────────────────────────────────
-
-export interface GameQuestion {
-  question: SoQuestion;
-  question_type: QuestionType;
-  /** Display-ready question string (stripped HTML + title + excerpt) */
-  question_text: string;
-  /** The answer used for evaluation (for MCQ = tag, for fill = word, for string = top_answer_body) */
-  correct_answer: string;
-  options?: string[];         // MCQ: 4 shuffled choices
-  blank_text?: string;        // fill_in_blank: title with ___ substituted
-  hint?: string;              // Optional hint shown after wrong attempt
-  time_limit: number;         // seconds
-}
 
 export interface SessionSnapshot {
   session_id: string;
@@ -129,7 +95,7 @@ export interface DuelPlayerInfo {
 
 export interface DuelQuestionPayload {
   round_number: number;
-  question: SoQuestion;
+  question: any;
   question_type: QuestionType;
   options?: string[];
   blank_text?: string;
